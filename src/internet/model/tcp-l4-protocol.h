@@ -270,6 +270,17 @@ public:
   virtual IpL4Protocol::DownTargetCallback6 GetDownTarget6 (void) const;
 
 protected:
+  Ptr<Node> m_node;                //!< the node this stack is associated with
+  Ipv4EndPointDemux *m_endPoints;  //!< A list of IPv4 end points.
+  Ipv6EndPointDemux *m_endPoints6; //!< A list of IPv6 end points.
+  TypeId m_rttTypeId;              //!< The RTT Estimator TypeId
+  TypeId m_congestionTypeId;       //!< The socket TypeId
+  TypeId m_recoveryTypeId;         //!< The recovery TypeId
+  std::vector<Ptr<TcpSocketBase> > m_sockets;      //!< list of sockets
+  IpL4Protocol::DownTargetCallback m_downTarget;   //!< Callback to send packets over IPv4
+  IpL4Protocol::DownTargetCallback6 m_downTarget6; //!< Callback to send packets over IPv6
+
+
   virtual void DoDispose (void);
 
   /**
@@ -314,15 +325,6 @@ protected:
                          const Address &incomingDAddr);
 
 private:
-  Ptr<Node> m_node;                //!< the node this stack is associated with
-  Ipv4EndPointDemux *m_endPoints;  //!< A list of IPv4 end points.
-  Ipv6EndPointDemux *m_endPoints6; //!< A list of IPv6 end points.
-  TypeId m_rttTypeId;              //!< The RTT Estimator TypeId
-  TypeId m_congestionTypeId;       //!< The socket TypeId
-  TypeId m_recoveryTypeId;         //!< The recovery TypeId
-  std::vector<Ptr<TcpSocketBase> > m_sockets;      //!< list of sockets
-  IpL4Protocol::DownTargetCallback m_downTarget;   //!< Callback to send packets over IPv4
-  IpL4Protocol::DownTargetCallback6 m_downTarget6; //!< Callback to send packets over IPv6
 
   /**
    * \brief Copy constructor

@@ -81,12 +81,13 @@ ScpsTpSocketBase::GetTypeId(void)
                   MakeEnumAccessor(&ScpsTpSocketBase::m_lossType),
                   MakeEnumChecker(LossType::Corruption, "Corruption",
                                   LossType::Congestion, "Congestion",
-                                  LossType::Link_Outage, "Link_Outage"))
+                                  LossType::Link_Outage, "Link_Outage"));
+    /*
     .AddTraceSource("LossType",
                     "Reason for data loss",
                     MakeTraceSourceAccessor (&ScpsTpSocketBase::m_lossType),
                     "ns3::EnumValueCallback::String"
-                    );
+                    );*/
   return tid;
 }
 
