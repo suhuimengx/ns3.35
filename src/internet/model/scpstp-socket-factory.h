@@ -16,12 +16,7 @@ public:
    * \return the object TypeId
    */
   static TypeId GetTypeId (void);
-  /*
-  ScpsTpSocketFactory ();
-  virtual ~ScpsTpSocketFactory ();
 
-  virtual Ptr<Socket> CreateSocket (void);
-  */
 };
 
 }  // namespace ns3

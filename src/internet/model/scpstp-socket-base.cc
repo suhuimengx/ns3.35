@@ -118,6 +118,7 @@ ScpsTpSocketBase::~ScpsTpSocketBase()
   NS_LOG_FUNCTION (this);
 }
 
+
 ScpsTpSocketBase::LossType
 ScpsTpSocketBase::GetLossType(void) const
 {
@@ -130,5 +131,6 @@ ScpsTpSocketBase::SetLossType(ScpsTpSocketBase::LossType losstype)
   NS_LOG_FUNCTION (this << losstype);
   m_lossType = losstype;
 }
+
 
 }

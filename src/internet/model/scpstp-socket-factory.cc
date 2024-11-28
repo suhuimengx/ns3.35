@@ -17,23 +17,5 @@ ScpsTpSocketFactory::GetTypeId (void)
   return tid;
 }
 
-/*
-ScpsTpSocketFactory::ScpsTpSocketFactory ()
-{
-  NS_LOG_FUNCTION (this);
-}
 
-ScpsTpSocketFactory::~ScpsTpSocketFactory ()
-{
-  NS_LOG_FUNCTION (this);
-}
-
-Ptr<Socket>
-ScpsTpSocketFactory::CreateSocket (void)
-{
-  NS_LOG_FUNCTION (this);
-  Ptr<ScpsTpSocketBase> socket = CreateObject<ScpsTpSocketBase> ();
-  return socket;
-}
-*/
 }  // namespace ns3

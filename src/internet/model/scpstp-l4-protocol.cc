@@ -49,6 +49,11 @@ ScpsTpL4Protocol::GetTypeId(void)
   return tid;
 }
 
+TypeId
+ScpsTpL4Protocol::GetInstanceTypeId () const
+{
+  return ScpsTpL4Protocol::GetTypeId ();
+}
 
 ScpsTpL4Protocol::ScpsTpL4Protocol()
 
