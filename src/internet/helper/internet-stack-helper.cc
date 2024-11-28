@@ -47,6 +47,7 @@
 #include "ns3/icmpv6-l4-protocol.h"
 #include "ns3/global-router-interface.h"
 #include "ns3/traffic-control-layer.h"
+#include "ns3/scpstp-l4-protocol.h"
 #include <limits>
 #include <map>
 
@@ -118,6 +119,7 @@ void
 InternetStackHelper::Initialize ()
 {
   SetTcp ("ns3::TcpL4Protocol");
+  SetScpsTp ("ns3::ScpsTpL4Protocol");
   Ipv4StaticRoutingHelper staticRouting;
   Ipv4GlobalRoutingHelper globalRouting;
   Ipv4ListRoutingHelper listRouting;
@@ -141,6 +143,7 @@ InternetStackHelper::InternetStackHelper (const InternetStackHelper &o)
   m_ipv4Enabled = o.m_ipv4Enabled;
   m_ipv6Enabled = o.m_ipv6Enabled;
   m_tcpFactory = o.m_tcpFactory;
+  m_scpstpFactory = o.m_scpstpFactory;
   m_ipv4ArpJitterEnabled = o.m_ipv4ArpJitterEnabled;
   m_ipv6NsRsJitterEnabled = o.m_ipv6NsRsJitterEnabled;
 }
@@ -257,6 +260,18 @@ InternetStackHelper::SetTcp (const std::string tid)
   m_tcpFactory.SetTypeId (tid);
 }
 
+void
+InternetStackHelper::SetScpsTp (const std::string tid)
+{
+  m_scpstpFactory.SetTypeId (tid);
+}
+void 
+InternetStackHelper::SetScpsTp (std::string tid, std::string n0, const AttributeValue &v0)
+{
+  m_scpstpFactory.SetTypeId (tid);
+  m_scpstpFactory.Set (n0,v0);
+}
+
 void 
 InternetStackHelper::SetTcp (std::string tid, std::string n0, const AttributeValue &v0)
 {
@@ -347,7 +362,9 @@ InternetStackHelper::Install (Ptr<Node> node) const
     {
       CreateAndAggregateObjectFromTypeId (node, "ns3::TrafficControlLayer");
       CreateAndAggregateObjectFromTypeId (node, "ns3::UdpL4Protocol");
+      //CreateAndAggregateObjectFromTypeId (node, "ns3::ScpsTpL4Protocol");
       node->AggregateObject (m_tcpFactory.Create<Object> ());
+      node->AggregateObject (m_scpstpFactory.Create<Object> ());
       Ptr<PacketSocketFactory> factory = CreateObject<PacketSocketFactory> ();
       node->AggregateObject (factory);
     }

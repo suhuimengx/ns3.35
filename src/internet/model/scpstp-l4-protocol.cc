@@ -23,6 +23,7 @@
 #include "tcp-socket-factory-impl.h"
 #include "tcp-socket-base.h"
 #include "scpstp-socket-base.h"
+#include "scpstp-socket-factory-impl.h"
 #include "tcp-congestion-ops.h"
 #include "tcp-cubic.h"
 #include "tcp-recovery-ops.h"
@@ -36,7 +37,7 @@
 namespace ns3 {
 
 NS_LOG_COMPONENT_DEFINE("ScpsTpL4Protocol");
-
+NS_OBJECT_ENSURE_REGISTERED (ScpsTpL4Protocol);
 
 TypeId
 ScpsTpL4Protocol::GetTypeId(void)
@@ -50,6 +51,7 @@ ScpsTpL4Protocol::GetTypeId(void)
 
 
 ScpsTpL4Protocol::ScpsTpL4Protocol()
+
 {
   NS_LOG_FUNCTION(this);
 }
@@ -82,7 +84,7 @@ ScpsTpL4Protocol::CreateSocket (TypeId congestionTypeId, TypeId recoveryTypeId)
   Ptr<TcpRecoveryOps> recovery = recoveryAlgorithmFactory.Create<TcpRecoveryOps> ();
 
   socket->SetNode (m_node);
-  socket->SetTcp (this);
+  socket->SetTcp (this);//这里还没改
   socket->SetRtt (rtt);
   socket->SetCongestionControlAlgorithm (algo);
   socket->SetRecoveryAlgorithm (recovery);
@@ -95,6 +97,43 @@ Ptr<Socket>
 ScpsTpL4Protocol::CreateSocket (void)
 {
   return CreateSocket (m_congestionTypeId, m_recoveryTypeId);
+}
+
+void
+ScpsTpL4Protocol::NotifyNewAggregate ()
+{
+  NS_LOG_FUNCTION (this);
+  Ptr<Node> node = this->GetObject<Node> ();
+  Ptr<Ipv4> ipv4 = this->GetObject<Ipv4> ();
+  Ptr<Ipv6> ipv6 = node->GetObject<Ipv6> ();
+
+  if (m_node == 0)
+    {
+      if ((node != 0) && (ipv4 != 0 || ipv6 != 0))
+        {
+          this->SetNode (node);
+          Ptr<ScpsTpSocketFactoryImpl> scpstpFactory = CreateObject<ScpsTpSocketFactoryImpl> ();
+          scpstpFactory->SetScpsTp (this);
+          node->AggregateObject (scpstpFactory);
+        }
+    }
+
+  // We set at least one of our 2 down targets to the IPv4/IPv6 send
+  // functions.  Since these functions have different prototypes, we
+  // need to keep track of whether we are connected to an IPv4 or
+  // IPv6 lower layer and call the appropriate one.
+
+  if (ipv4 != 0 && m_downTarget.IsNull ())
+    {
+      ipv4->Insert (this);
+      this->SetDownTarget (MakeCallback (&Ipv4::Send, ipv4));
+    }
+  if (ipv6 != 0 && m_downTarget6.IsNull ())
+    {
+      ipv6->Insert (this);
+      this->SetDownTarget6 (MakeCallback (&Ipv6::Send, ipv6));
+    }
+  IpL4Protocol::NotifyNewAggregate ();
 }
 
 } // namespace ns3

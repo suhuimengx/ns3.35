@@ -186,6 +186,11 @@ public:
   void SetTcp (std::string tid);
 
   /**
+   * \brief set the ScpsTp stack which will not need any other parameter.
+   */
+  void SetScpsTp(std::string tid);
+  void SetScpsTp (std::string tid, std::string attr, const AttributeValue &val); 
+  /**
    * \brief This function is used to setup the Network Simulation Cradle stack with library value.
    * 
    * Give the NSC stack a shared library file name to use when creating the 
@@ -304,6 +309,8 @@ private:
    * \brief TCP objects factory
    */
   ObjectFactory m_tcpFactory;
+
+  ObjectFactory m_scpstpFactory;
 
   /**
    * \brief IPv4 routing helper.

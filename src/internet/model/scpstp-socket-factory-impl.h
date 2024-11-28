@@ -7,7 +7,7 @@
 
 namespace ns3 {
 
-
+class ScpsTpL4Protocol;
 
 class ScpsTpSocketFactoryImpl : public ScpsTpSocketFactory
 {
