@@ -27,7 +27,7 @@
 #ifndef SCPSTPSOCKETBASE_H
 #define SCPSTPSOCKETBASE_H
 
-#include "tcp-socket-base.h"
+#include "ns3/tcp-socket-base.h"
 
 namespace ns3 {
 
