@@ -28,6 +28,18 @@
 #define SCPSTPSOCKETBASE_H
 
 #include "ns3/tcp-socket-base.h"
+#include "ns3/scpstp-l4-protocol.h"
+#include <stdint.h>
+#include <queue>
+#include "ns3/traced-value.h"
+#include "ns3/tcp-socket.h"
+#include "ns3/ipv4-header.h"
+#include "ns3/ipv6-header.h"
+#include "ns3/timer.h"
+#include "ns3/sequence-number.h"
+#include "ns3/data-rate.h"
+#include "ns3/node.h"
+#include "ns3/tcp-socket-state.h"
 
 namespace ns3 {
 
@@ -78,14 +90,96 @@ public:
    */
   void SetLossType(LossType losstype);
 
-  
+  /**
+   * \brief Set the associated ScpsTp L4 protocol.
+   * \param scpstp the scpsp L4 protocol
+   */
+  virtual void SetScpsTp (Ptr<ScpsTpL4Protocol> scpstp);
+
+  virtual int Bind (void);    // Bind a socket by setting up endpoint in ScpsTpL4Protocol
+  virtual int Bind6 (void);    // Bind a socket by setting up endpoint in ScpsTpL4Protocol
+  virtual int Bind (const Address &address);         // ... endpoint of specific addr or port
+
 
 protected:
+  /**
+   * \brief Called by ScpsTpSocketBase::ForwardUp{,6}().
+   *
+   * Get a packet from L3. This is the real function to handle the
+   * incoming packet from lower layers. This is
+   * wrapped by ForwardUp() so that this function can be overloaded by daughter
+   * classes.
+   *
+   * \param packet the incoming packet
+   * \param fromAddress the address of the sender of packet
+   * \param toAddress the address of the receiver of packet (hopefully, us)
+   */
+  virtual void DoForwardUp (Ptr<Packet> packet, const Address &fromAddress,
+                            const Address &toAddress);
+
+ /**
+   * \brief Kill this socket by zeroing its attributes (IPv4)
+   *
+   * This is a callback function configured to m_endpoint in
+   * SetupCallback(), invoked when the endpoint is destroyed.
+   */
+  void Destroy (void);
+
+  /**
+   * \brief Kill this socket by zeroing its attributes (IPv6)
+   *
+   * This is a callback function configured to m_endpoint in
+   * SetupCallback(), invoked when the endpoint is destroyed.
+   */
+  void Destroy6 (void);
+
+  /**
+   * \brief Send a empty packet that carries a flag, e.g., ACK
+   *
+   * \param flags the packet's flags
+   */
+  virtual void SendEmptyPacket (uint8_t flags);
+
+  /**
+   * \brief Deallocate m_endPoint and m_endPoint6
+   */
+  void DeallocateEndPoint (void);
+
+  /**
+   * \brief Complete a connection by forking the socket
+   *
+   * This function is called only if a SYN received in LISTEN state. After
+   * ScpsTpSocketBase cloned, allocate a new end point to handle the incoming
+   * connection and send a SYN+ACK to complete the handshake.
+   *
+   * \param p the packet triggering the fork
+   * \param tcpHeader the TCP header of the triggering packet
+   * \param fromAddress the address of the remote host
+   * \param toAddress the address the connection is directed to
+   */
+  virtual void CompleteFork (Ptr<Packet> p, const TcpHeader& tcpHeader,
+                             const Address& fromAddress, const Address& toAddress);
+
+  /**
+   * \brief Extract at most maxSize bytes from the TxBuffer at sequence seq, add the
+   *        TCP header, and send to ScpsTpL4Protocol
+   *
+   * \param seq the sequence number
+   * \param maxSize the maximum data block to be transmitted (in bytes)
+   * \param withAck forces an ACK to be sent
+   * \returns the number of bytes sent
+   */
+  virtual uint32_t SendDataPacket (SequenceNumber32 seq, uint32_t maxSize, bool withAck);
+
+  /**
+   * \brief Send 1 byte probe to get an updated window size
+   */
+  virtual void PersistTimeout (void);
 private:
 
 protected:
-  LossType m_lossType;
-  
+  LossType m_lossType;                       //!< the reason for data loss
+  Ptr<ScpsTpL4Protocol>  m_scpstp;                 //!< the associated ScpsTp L4 protocol  
 
 
 };

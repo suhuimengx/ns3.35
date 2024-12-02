@@ -102,12 +102,12 @@ ScpsTpSocketBase::ScpsTpSocketBase(void)
 {
   NS_LOG_FUNCTION (this);
   m_lossType = Corruption;
-
 }
 
 ScpsTpSocketBase::ScpsTpSocketBase(const ScpsTpSocketBase &sock)
   : TcpSocketBase (sock),
-    m_lossType (sock.m_lossType)
+    m_lossType (sock.m_lossType),
+    m_scpstp (sock.m_scpstp)
 {
   NS_LOG_FUNCTION (this);
   NS_LOG_LOGIC ("Invoked the copy constructor");
@@ -116,6 +116,28 @@ ScpsTpSocketBase::ScpsTpSocketBase(const ScpsTpSocketBase &sock)
 ScpsTpSocketBase::~ScpsTpSocketBase()
 {
   NS_LOG_FUNCTION (this);
+  if (m_endPoint != nullptr)
+    {
+      NS_ASSERT (m_scpstp != nullptr);
+      /*
+       * Upon Bind, an Ipv4Endpoint is allocated and set to m_endPoint, and
+       * DestroyCallback is set to ScpsTpSocketBase::Destroy. If we called
+       * m_scpstp->DeAllocate, it will destroy its Ipv4EndpointDemux::DeAllocate,
+       * which in turn destroys my m_endPoint, and in turn invokes
+       * ScpsTpSocketBase::Destroy to nullify m_node, m_endPoint, and m_scpstp.
+       */
+      NS_ASSERT (m_endPoint != nullptr);
+      m_scpstp->DeAllocate (m_endPoint);
+      NS_ASSERT (m_endPoint == nullptr);
+    }
+  if (m_endPoint6 != nullptr)
+    {
+      NS_ASSERT (m_scpstp != nullptr);
+      NS_ASSERT (m_endPoint6 != nullptr);
+      m_scpstp->DeAllocate (m_endPoint6);
+      NS_ASSERT (m_endPoint6 == nullptr);
+    }
+  m_scpstp = 0;
 }
 
 
@@ -130,6 +152,729 @@ ScpsTpSocketBase::SetLossType(ScpsTpSocketBase::LossType losstype)
 {
   NS_LOG_FUNCTION (this << losstype);
   m_lossType = losstype;
+}
+
+/* Associate the L4 protocol (e.g. mux/demux) with this socket */
+void
+ScpsTpSocketBase::SetScpsTp (Ptr<ScpsTpL4Protocol> scpstp)
+{
+  m_scpstp = scpstp;
+}
+
+/* Inherit from Socket class: Bind socket to an end-point in ScpsTpL4Protocol */
+int
+ScpsTpSocketBase::Bind (void)
+{
+  NS_LOG_FUNCTION (this);
+  m_endPoint = m_scpstp->Allocate ();
+  if (0 == m_endPoint)
+    {
+      m_errno = ERROR_ADDRNOTAVAIL;
+      return -1;
+    }
+
+  m_scpstp->AddSocket (this);
+
+  return SetupCallback ();
+}
+
+int
+ScpsTpSocketBase::Bind6 (void)
+{
+  NS_LOG_FUNCTION (this);
+  m_endPoint6 = m_scpstp->Allocate6 ();
+  if (0 == m_endPoint6)
+    {
+      m_errno = ERROR_ADDRNOTAVAIL;
+      return -1;
+    }
+
+  m_scpstp->AddSocket (this);
+
+  return SetupCallback ();
+}
+
+/* Inherit from Socket class: Bind socket (with specific address) to an end-point in ScpsTpL4Protocol */
+int
+ScpsTpSocketBase::Bind (const Address &address)
+{
+  NS_LOG_FUNCTION (this << address);
+  if (InetSocketAddress::IsMatchingType (address))
+    {
+      InetSocketAddress transport = InetSocketAddress::ConvertFrom (address);
+      Ipv4Address ipv4 = transport.GetIpv4 ();
+      uint16_t port = transport.GetPort ();
+      SetIpTos (transport.GetTos ());
+      if (ipv4 == Ipv4Address::GetAny () && port == 0)
+        {
+          m_endPoint = m_scpstp->Allocate ();
+        }
+      else if (ipv4 == Ipv4Address::GetAny () && port != 0)
+        {
+          m_endPoint = m_scpstp->Allocate (GetBoundNetDevice (), port);
+        }
+      else if (ipv4 != Ipv4Address::GetAny () && port == 0)
+        {
+          m_endPoint = m_scpstp->Allocate (ipv4);
+        }
+      else if (ipv4 != Ipv4Address::GetAny () && port != 0)
+        {
+          m_endPoint = m_scpstp->Allocate (GetBoundNetDevice (), ipv4, port);
+        }
+      if (0 == m_endPoint)
+        {
+          m_errno = port ? ERROR_ADDRINUSE : ERROR_ADDRNOTAVAIL;
+          return -1;
+        }
+    }
+  else if (Inet6SocketAddress::IsMatchingType (address))
+    {
+      Inet6SocketAddress transport = Inet6SocketAddress::ConvertFrom (address);
+      Ipv6Address ipv6 = transport.GetIpv6 ();
+      uint16_t port = transport.GetPort ();
+      if (ipv6 == Ipv6Address::GetAny () && port == 0)
+        {
+          m_endPoint6 = m_scpstp->Allocate6 ();
+        }
+      else if (ipv6 == Ipv6Address::GetAny () && port != 0)
+        {
+          m_endPoint6 = m_scpstp->Allocate6 (GetBoundNetDevice (), port);
+        }
+      else if (ipv6 != Ipv6Address::GetAny () && port == 0)
+        {
+          m_endPoint6 = m_scpstp->Allocate6 (ipv6);
+        }
+      else if (ipv6 != Ipv6Address::GetAny () && port != 0)
+        {
+          m_endPoint6 = m_scpstp->Allocate6 (GetBoundNetDevice (), ipv6, port);
+        }
+      if (0 == m_endPoint6)
+        {
+          m_errno = port ? ERROR_ADDRINUSE : ERROR_ADDRNOTAVAIL;
+          return -1;
+        }
+    }
+  else
+    {
+      m_errno = ERROR_INVAL;
+      return -1;
+    }
+
+  m_scpstp->AddSocket (this);
+
+  NS_LOG_LOGIC ("ScpsTpSocketBase " << this << " got an endpoint: " << m_endPoint);
+
+  return SetupCallback ();
+}
+
+void
+ScpsTpSocketBase::DoForwardUp (Ptr<Packet> packet, const Address &fromAddress,
+                            const Address &toAddress)
+{
+  // in case the packet still has a priority tag attached, remove it
+  SocketPriorityTag priorityTag;
+  packet->RemovePacketTag (priorityTag);
+
+  // Peel off TCP header
+  TcpHeader tcpHeader;
+  packet->RemoveHeader (tcpHeader);
+  SequenceNumber32 seq = tcpHeader.GetSequenceNumber ();
+
+  if (m_state == ESTABLISHED && !(tcpHeader.GetFlags () & TcpHeader::RST))
+    {
+      // Check if the sender has responded to ECN echo by reducing the Congestion Window
+      if (tcpHeader.GetFlags () & TcpHeader::CWR )
+        {
+          // Check if a packet with CE bit set is received. If there is no CE bit set, then change the state to ECN_IDLE to
+          // stop sending ECN Echo messages. If there is CE bit set, the packet should continue sending ECN Echo messages
+          //
+          if (m_tcb->m_ecnState != TcpSocketState::ECN_CE_RCVD)
+            {
+              NS_LOG_DEBUG (TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_IDLE");
+              m_tcb->m_ecnState = TcpSocketState::ECN_IDLE;
+            }
+        }
+    }
+
+  m_rxTrace (packet, tcpHeader, this);
+
+  if (tcpHeader.GetFlags () & TcpHeader::SYN)
+    {
+      /* The window field in a segment where the SYN bit is set (i.e., a <SYN>
+       * or <SYN,ACK>) MUST NOT be scaled (from RFC 7323 page 9). But should be
+       * saved anyway..
+       */
+      m_rWnd = tcpHeader.GetWindowSize ();
+
+      if (tcpHeader.HasOption (TcpOption::WINSCALE) && m_winScalingEnabled)
+        {
+          ProcessOptionWScale (tcpHeader.GetOption (TcpOption::WINSCALE));
+        }
+      else
+        {
+          m_winScalingEnabled = false;
+        }
+
+      if (tcpHeader.HasOption (TcpOption::SACKPERMITTED) && m_sackEnabled)
+        {
+          ProcessOptionSackPermitted (tcpHeader.GetOption (TcpOption::SACKPERMITTED));
+        }
+      else
+        {
+          m_sackEnabled = false;
+          m_txBuffer->SetSackEnabled (false);
+        }
+
+      // When receiving a <SYN> or <SYN-ACK> we should adapt TS to the other end
+      if (tcpHeader.HasOption (TcpOption::TS) && m_timestampEnabled)
+        {
+          ProcessOptionTimestamp (tcpHeader.GetOption (TcpOption::TS),
+                                  tcpHeader.GetSequenceNumber ());
+        }
+      else
+        {
+          m_timestampEnabled = false;
+        }
+
+      // Initialize cWnd and ssThresh
+      m_tcb->m_cWnd = GetInitialCwnd () * GetSegSize ();
+      m_tcb->m_cWndInfl = m_tcb->m_cWnd;
+      m_tcb->m_ssThresh = GetInitialSSThresh ();
+
+      if (tcpHeader.GetFlags () & TcpHeader::ACK)
+        {
+          EstimateRtt (tcpHeader);
+          m_highRxAckMark = tcpHeader.GetAckNumber ();
+        }
+    }
+  else if (tcpHeader.GetFlags () & TcpHeader::ACK)
+    {
+      NS_ASSERT (!(tcpHeader.GetFlags () & TcpHeader::SYN));
+      if (m_timestampEnabled)
+        {
+          if (!tcpHeader.HasOption (TcpOption::TS))
+            {
+              // Ignoring segment without TS, RFC 7323
+              NS_LOG_LOGIC ("At state " << TcpStateName[m_state] <<
+                            " received packet of seq [" << seq <<
+                            ":" << seq + packet->GetSize () <<
+                            ") without TS option. Silently discard it");
+              return;
+            }
+          else
+            {
+              ProcessOptionTimestamp (tcpHeader.GetOption (TcpOption::TS),
+                                      tcpHeader.GetSequenceNumber ());
+            }
+        }
+
+      EstimateRtt (tcpHeader);
+      UpdateWindowSize (tcpHeader);
+    }
+
+
+  if (m_rWnd.Get () == 0 && m_persistEvent.IsExpired ())
+    { // Zero window: Enter persist state to send 1 byte to probe
+      NS_LOG_LOGIC (this << " Enter zerowindow persist state");
+      NS_LOG_LOGIC (this << " Cancelled ReTxTimeout event which was set to expire at " <<
+                    (Simulator::Now () + Simulator::GetDelayLeft (m_retxEvent)).GetSeconds ());
+      m_retxEvent.Cancel ();
+      NS_LOG_LOGIC ("Schedule persist timeout at time " <<
+                    Simulator::Now ().GetSeconds () << " to expire at time " <<
+                    (Simulator::Now () + m_persistTimeout).GetSeconds ());
+      m_persistEvent = Simulator::Schedule (m_persistTimeout, &ScpsTpSocketBase::PersistTimeout, this);
+      NS_ASSERT (m_persistTimeout == Simulator::GetDelayLeft (m_persistEvent));
+    }
+
+  // TCP state machine code in different process functions
+  // C.f.: tcp_rcv_state_process() in tcp_input.c in Linux kernel
+  switch (m_state)
+    {
+    case ESTABLISHED:
+      ProcessEstablished (packet, tcpHeader);
+      break;
+    case LISTEN:
+      ProcessListen (packet, tcpHeader, fromAddress, toAddress);
+      break;
+    case TIME_WAIT:
+      // Do nothing
+      break;
+    case CLOSED:
+      // Send RST if the incoming packet is not a RST
+      if ((tcpHeader.GetFlags () & ~(TcpHeader::PSH | TcpHeader::URG)) != TcpHeader::RST)
+        { // Since m_endPoint is not configured yet, we cannot use SendRST here
+          TcpHeader h;
+          Ptr<Packet> p = Create<Packet> ();
+          h.SetFlags (TcpHeader::RST);
+          h.SetSequenceNumber (m_tcb->m_nextTxSequence);
+          h.SetAckNumber (m_tcb->m_rxBuffer->NextRxSequence ());
+          h.SetSourcePort (tcpHeader.GetDestinationPort ());
+          h.SetDestinationPort (tcpHeader.GetSourcePort ());
+          h.SetWindowSize (AdvertisedWindowSize ());
+          AddOptions (h);
+          m_txTrace (p, h, this);
+          m_scpstp->SendPacket (p, h, toAddress, fromAddress, m_boundnetdevice);
+        }
+      break;
+    case SYN_SENT:
+      ProcessSynSent (packet, tcpHeader);
+      break;
+    case SYN_RCVD:
+      ProcessSynRcvd (packet, tcpHeader, fromAddress, toAddress);
+      break;
+    case FIN_WAIT_1:
+    case FIN_WAIT_2:
+    case CLOSE_WAIT:
+      ProcessWait (packet, tcpHeader);
+      break;
+    case CLOSING:
+      ProcessClosing (packet, tcpHeader);
+      break;
+    case LAST_ACK:
+      ProcessLastAck (packet, tcpHeader);
+      break;
+    default: // mute compiler
+      break;
+    }
+
+  if (m_rWnd.Get () != 0 && m_persistEvent.IsRunning ())
+    { // persist probes end, the other end has increased the window
+      NS_ASSERT (m_connected);
+      NS_LOG_LOGIC (this << " Leaving zerowindow persist state");
+      m_persistEvent.Cancel ();
+
+      SendPendingData (m_connected);
+    }
+}
+
+/* Kill this socket. This is a callback function configured to m_endpoint in
+   SetupCallback(), invoked when the endpoint is destroyed. */
+void
+ScpsTpSocketBase::Destroy (void)
+{
+  NS_LOG_FUNCTION (this);
+  m_endPoint = nullptr;
+  if (m_scpstp != nullptr)
+    {
+      m_scpstp->RemoveSocket (this);
+    }
+  NS_LOG_LOGIC (this << " Cancelled ReTxTimeout event which was set to expire at " <<
+                (Simulator::Now () + Simulator::GetDelayLeft (m_retxEvent)).GetSeconds ());
+  CancelAllTimers ();
+}
+
+/* Kill this socket. This is a callback function configured to m_endpoint in
+   SetupCallback(), invoked when the endpoint is destroyed. */
+void
+ScpsTpSocketBase::Destroy6 (void)
+{
+  NS_LOG_FUNCTION (this);
+  m_endPoint6 = nullptr;
+  if (m_scpstp != nullptr)
+    {
+      m_scpstp->RemoveSocket (this);
+    }
+  NS_LOG_LOGIC (this << " Cancelled ReTxTimeout event which was set to expire at " <<
+                (Simulator::Now () + Simulator::GetDelayLeft (m_retxEvent)).GetSeconds ());
+  CancelAllTimers ();
+}
+
+/* Send an empty packet with specified TCP flags */
+void
+ScpsTpSocketBase::SendEmptyPacket (uint8_t flags)
+{
+  NS_LOG_FUNCTION (this << static_cast<uint32_t> (flags));
+
+  if (m_endPoint == nullptr && m_endPoint6 == nullptr)
+    {
+      NS_LOG_WARN ("Failed to send empty packet due to null endpoint");
+      return;
+    }
+
+  Ptr<Packet> p = Create<Packet> ();
+  TcpHeader header;
+  SequenceNumber32 s = m_tcb->m_nextTxSequence;
+
+  if (flags & TcpHeader::FIN)
+    {
+      flags |= TcpHeader::ACK;
+    }
+  else if (m_state == FIN_WAIT_1 || m_state == LAST_ACK || m_state == CLOSING)
+    {
+      ++s;
+    }
+
+  AddSocketTags (p);
+
+  header.SetFlags (flags);
+  header.SetSequenceNumber (s);
+  header.SetAckNumber (m_tcb->m_rxBuffer->NextRxSequence ());
+  if (m_endPoint != nullptr)
+    {
+      header.SetSourcePort (m_endPoint->GetLocalPort ());
+      header.SetDestinationPort (m_endPoint->GetPeerPort ());
+    }
+  else
+    {
+      header.SetSourcePort (m_endPoint6->GetLocalPort ());
+      header.SetDestinationPort (m_endPoint6->GetPeerPort ());
+    }
+  AddOptions (header);
+
+  // RFC 6298, clause 2.4
+  m_rto = Max (m_rtt->GetEstimate () + Max (m_clockGranularity, m_rtt->GetVariation () * 4), m_minRto);
+
+  uint16_t windowSize = AdvertisedWindowSize ();
+  bool hasSyn = flags & TcpHeader::SYN;
+  bool hasFin = flags & TcpHeader::FIN;
+  bool isAck = flags == TcpHeader::ACK;
+  if (hasSyn)
+    {
+      if (m_winScalingEnabled)
+        { // The window scaling option is set only on SYN packets
+          AddOptionWScale (header);
+        }
+
+      if (m_sackEnabled)
+        {
+          AddOptionSackPermitted (header);
+        }
+
+      if (m_synCount == 0)
+        { // No more connection retries, give up
+          NS_LOG_LOGIC ("Connection failed.");
+          m_rtt->Reset (); //According to recommendation -> RFC 6298
+          NotifyConnectionFailed ();
+          m_state = CLOSED;
+          DeallocateEndPoint ();
+          return;
+        }
+      else
+        { // Exponential backoff of connection time out
+          int backoffCount = 0x1 << (m_synRetries - m_synCount);
+          m_rto = m_cnTimeout * backoffCount;
+          m_synCount--;
+        }
+
+      if (m_synRetries - 1 == m_synCount)
+        {
+          UpdateRttHistory (s, 0, false);
+        }
+      else
+        { // This is SYN retransmission
+          UpdateRttHistory (s, 0, true);
+        }
+
+      windowSize = AdvertisedWindowSize (false);
+    }
+  header.SetWindowSize (windowSize);
+
+  if (flags & TcpHeader::ACK)
+    { // If sending an ACK, cancel the delay ACK as well
+      m_delAckEvent.Cancel ();
+      m_delAckCount = 0;
+      if (m_highTxAck < header.GetAckNumber ())
+        {
+          m_highTxAck = header.GetAckNumber ();
+        }
+      if (m_sackEnabled && m_tcb->m_rxBuffer->GetSackListSize () > 0)
+        {
+          AddOptionSack (header);
+        }
+      NS_LOG_INFO ("Sending a pure ACK, acking seq " << m_tcb->m_rxBuffer->NextRxSequence ());
+    }
+
+  m_txTrace (p, header, this);
+
+  if (m_endPoint != nullptr)
+    {
+      m_scpstp->SendPacket (p, header, m_endPoint->GetLocalAddress (),
+                         m_endPoint->GetPeerAddress (), m_boundnetdevice);
+    }
+  else
+    {
+      m_scpstp->SendPacket (p, header, m_endPoint6->GetLocalAddress (),
+                         m_endPoint6->GetPeerAddress (), m_boundnetdevice);
+    }
+
+
+  if (m_retxEvent.IsExpired () && (hasSyn || hasFin) && !isAck )
+    { // Retransmit SYN / SYN+ACK / FIN / FIN+ACK to guard against lost
+      NS_LOG_LOGIC ("Schedule retransmission timeout at time "
+                    << Simulator::Now ().GetSeconds () << " to expire at time "
+                    << (Simulator::Now () + m_rto.Get ()).GetSeconds ());
+      m_retxEvent = Simulator::Schedule (m_rto, &ScpsTpSocketBase::SendEmptyPacket, this, flags);
+    }
+}
+
+/* Deallocate the end point and cancel all the timers */
+void
+ScpsTpSocketBase::DeallocateEndPoint (void)
+{
+  if (m_endPoint != nullptr)
+    {
+      CancelAllTimers ();
+      m_endPoint->SetDestroyCallback (MakeNullCallback<void> ());
+      m_scpstp->DeAllocate (m_endPoint);
+      m_endPoint = nullptr;
+      m_scpstp->RemoveSocket (this);
+    }
+  else if (m_endPoint6 != nullptr)
+    {
+      CancelAllTimers ();
+      m_endPoint6->SetDestroyCallback (MakeNullCallback<void> ());
+      m_scpstp->DeAllocate (m_endPoint6);
+      m_endPoint6 = nullptr;
+      m_scpstp->RemoveSocket (this);
+    }
+}
+
+/* This function is called only if a SYN received in LISTEN state. After
+   ScpsTpSocketBase cloned, allocate a new end point to handle the incoming
+   connection and send a SYN+ACK to complete the handshake. */
+void
+ScpsTpSocketBase::CompleteFork (Ptr<Packet> p, const TcpHeader& h,
+                             const Address& fromAddress, const Address& toAddress)
+{
+  NS_LOG_FUNCTION (this << p << h << fromAddress << toAddress);
+  NS_UNUSED (p);
+  // Get port and address from peer (connecting host)
+  if (InetSocketAddress::IsMatchingType (toAddress))
+    {
+      m_endPoint = m_scpstp->Allocate (GetBoundNetDevice (),
+                                    InetSocketAddress::ConvertFrom (toAddress).GetIpv4 (),
+                                    InetSocketAddress::ConvertFrom (toAddress).GetPort (),
+                                    InetSocketAddress::ConvertFrom (fromAddress).GetIpv4 (),
+                                    InetSocketAddress::ConvertFrom (fromAddress).GetPort ());
+      m_endPoint6 = nullptr;
+    }
+  else if (Inet6SocketAddress::IsMatchingType (toAddress))
+    {
+      m_endPoint6 = m_scpstp->Allocate6 (GetBoundNetDevice (),
+                                      Inet6SocketAddress::ConvertFrom (toAddress).GetIpv6 (),
+                                      Inet6SocketAddress::ConvertFrom (toAddress).GetPort (),
+                                      Inet6SocketAddress::ConvertFrom (fromAddress).GetIpv6 (),
+                                      Inet6SocketAddress::ConvertFrom (fromAddress).GetPort ());
+      m_endPoint = nullptr;
+    }
+  m_scpstp->AddSocket (this);
+
+  // Change the cloned socket from LISTEN state to SYN_RCVD
+  NS_LOG_DEBUG ("LISTEN -> SYN_RCVD");
+  m_state = SYN_RCVD;
+  m_synCount = m_synRetries;
+  m_dataRetrCount = m_dataRetries;
+  SetupCallback ();
+  // Set the sequence number and send SYN+ACK
+  m_tcb->m_rxBuffer->SetNextRxSequence (h.GetSequenceNumber () + SequenceNumber32 (1));
+
+  /* Check if we received an ECN SYN packet. Change the ECN state of receiver to ECN_IDLE if sender has sent an ECN SYN
+   * packet and the traffic is ECN Capable
+   */
+  if (m_tcb->m_useEcn != TcpSocketState::Off &&
+      (h.GetFlags () & (TcpHeader::CWR | TcpHeader::ECE)) == (TcpHeader::CWR | TcpHeader::ECE))
+    {
+      SendEmptyPacket (TcpHeader::SYN | TcpHeader::ACK | TcpHeader::ECE);
+      NS_LOG_DEBUG (TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_IDLE");
+      m_tcb->m_ecnState = TcpSocketState::ECN_IDLE;
+    }
+  else
+    {
+      SendEmptyPacket (TcpHeader::SYN | TcpHeader::ACK);
+      m_tcb->m_ecnState = TcpSocketState::ECN_DISABLED;
+    }
+}
+
+/* Extract at most maxSize bytes from the TxBuffer at sequence seq, add the
+    TCP header, and send to ScpsTpL4Protocol */
+uint32_t
+ScpsTpSocketBase::SendDataPacket (SequenceNumber32 seq, uint32_t maxSize, bool withAck)
+{
+  NS_LOG_FUNCTION (this << seq << maxSize << withAck);
+
+  bool isStartOfTransmission = BytesInFlight () == 0U;
+  TcpTxItem *outItem = m_txBuffer->CopyFromSequence (maxSize, seq);
+
+  m_rateOps->SkbSent(outItem, isStartOfTransmission);
+
+  bool isRetransmission = outItem->IsRetrans ();
+  Ptr<Packet> p = outItem->GetPacketCopy ();
+  uint32_t sz = p->GetSize (); // Size of packet
+  uint8_t flags = withAck ? TcpHeader::ACK : 0;
+  uint32_t remainingData = m_txBuffer->SizeFromSequence (seq + SequenceNumber32 (sz));
+
+  // ScpsTp sender should not send data out of the window advertised by the
+  // peer when it is not retransmission.
+  NS_ASSERT (isRetransmission || ((m_highRxAckMark + SequenceNumber32 (m_rWnd)) >= (seq + SequenceNumber32 (maxSize))));
+
+  if (IsPacingEnabled ())
+    {
+      NS_LOG_INFO ("Pacing is enabled");
+      if (m_pacingTimer.IsExpired ())
+        {
+          NS_LOG_DEBUG ("Current Pacing Rate " << m_tcb->m_pacingRate);
+          NS_LOG_DEBUG ("Timer is in expired state, activate it " << m_tcb->m_pacingRate.Get ().CalculateBytesTxTime (sz));
+          m_pacingTimer.Schedule (m_tcb->m_pacingRate.Get ().CalculateBytesTxTime (sz));
+        }
+      else
+        {
+          NS_LOG_INFO ("Timer is already in running state");
+        }
+    }
+  else
+    {
+      NS_LOG_INFO ("Pacing is disabled");
+    }
+
+  if (withAck)
+    {
+      m_delAckEvent.Cancel ();
+      m_delAckCount = 0;
+    }
+
+  if (m_tcb->m_ecnState == TcpSocketState::ECN_ECE_RCVD && m_ecnEchoSeq.Get() > m_ecnCWRSeq.Get () && !isRetransmission)
+    {
+      NS_LOG_DEBUG (TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_CWR_SENT");
+      m_tcb->m_ecnState = TcpSocketState::ECN_CWR_SENT;
+      m_ecnCWRSeq = seq;
+      flags |= TcpHeader::CWR;
+      NS_LOG_INFO ("CWR flags set");
+    }
+
+  AddSocketTags (p);
+
+  if (m_closeOnEmpty && (remainingData == 0))
+    {
+      flags |= TcpHeader::FIN;
+      if (m_state == ESTABLISHED)
+        { // On active close: I am the first one to send FIN
+          NS_LOG_DEBUG ("ESTABLISHED -> FIN_WAIT_1");
+          m_state = FIN_WAIT_1;
+        }
+      else if (m_state == CLOSE_WAIT)
+        { // On passive close: Peer sent me FIN already
+          NS_LOG_DEBUG ("CLOSE_WAIT -> LAST_ACK");
+          m_state = LAST_ACK;
+        }
+    }
+  TcpHeader header;
+  header.SetFlags (flags);
+  header.SetSequenceNumber (seq);
+  header.SetAckNumber (m_tcb->m_rxBuffer->NextRxSequence ());
+  if (m_endPoint)
+    {
+      header.SetSourcePort (m_endPoint->GetLocalPort ());
+      header.SetDestinationPort (m_endPoint->GetPeerPort ());
+    }
+  else
+    {
+      header.SetSourcePort (m_endPoint6->GetLocalPort ());
+      header.SetDestinationPort (m_endPoint6->GetPeerPort ());
+    }
+  header.SetWindowSize (AdvertisedWindowSize ());
+  AddOptions (header);
+
+  if (m_retxEvent.IsExpired ())
+    {
+      // Schedules retransmit timeout. m_rto should be already doubled.
+
+      NS_LOG_LOGIC (this << " SendDataPacket Schedule ReTxTimeout at time " <<
+                    Simulator::Now ().GetSeconds () << " to expire at time " <<
+                    (Simulator::Now () + m_rto.Get ()).GetSeconds () );
+      m_retxEvent = Simulator::Schedule (m_rto, &ScpsTpSocketBase::ReTxTimeout, this);
+    }
+
+  m_txTrace (p, header, this);
+
+  if (m_endPoint)
+    {
+      m_scpstp->SendPacket (p, header, m_endPoint->GetLocalAddress (),
+                         m_endPoint->GetPeerAddress (), m_boundnetdevice);
+      NS_LOG_DEBUG ("Send segment of size " << sz << " with remaining data " <<
+                    remainingData << " via ScpsTpL4Protocol to " <<  m_endPoint->GetPeerAddress () <<
+                    ". Header " << header);
+    }
+  else
+    {
+      m_scpstp->SendPacket (p, header, m_endPoint6->GetLocalAddress (),
+                         m_endPoint6->GetPeerAddress (), m_boundnetdevice);
+      NS_LOG_DEBUG ("Send segment of size " << sz << " with remaining data " <<
+                    remainingData << " via ScpsTpL4Protocol to " <<  m_endPoint6->GetPeerAddress () <<
+                    ". Header " << header);
+    }
+
+  UpdateRttHistory (seq, sz, isRetransmission);
+
+  // Update bytes sent during recovery phase
+  if (m_tcb->m_congState == TcpSocketState::CA_RECOVERY || m_tcb->m_congState == TcpSocketState::CA_CWR)
+    {
+      m_recoveryOps->UpdateBytesSent (sz);
+    }
+
+  // Notify the application of the data being sent unless this is a retransmit
+  if (!isRetransmission)
+    {
+      Simulator::ScheduleNow (&ScpsTpSocketBase::NotifyDataSent, this,
+                              (seq + sz - m_tcb->m_highTxMark.Get ()));
+    }
+  // Update highTxMark
+  m_tcb->m_highTxMark = std::max (seq + sz, m_tcb->m_highTxMark.Get ());
+  return sz;
+}
+
+// Send 1-byte data to probe for the window size at the receiver when
+// the local knowledge tells that the receiver has zero window size
+// C.f.: RFC793 p.42, RFC1112 sec.4.2.2.17
+void
+ScpsTpSocketBase::PersistTimeout ()
+{
+  NS_LOG_LOGIC ("PersistTimeout expired at " << Simulator::Now ().GetSeconds ());
+  m_persistTimeout = std::min (Seconds (60), Time (2 * m_persistTimeout)); // max persist timeout = 60s
+  Ptr<Packet> p = m_txBuffer->CopyFromSequence (1, m_tcb->m_nextTxSequence)->GetPacketCopy ();
+  m_txBuffer->ResetLastSegmentSent ();
+  TcpHeader tcpHeader;
+  tcpHeader.SetSequenceNumber (m_tcb->m_nextTxSequence);
+  tcpHeader.SetAckNumber (m_tcb->m_rxBuffer->NextRxSequence ());
+  tcpHeader.SetWindowSize (AdvertisedWindowSize ());
+  if (m_endPoint != nullptr)
+    {
+      tcpHeader.SetSourcePort (m_endPoint->GetLocalPort ());
+      tcpHeader.SetDestinationPort (m_endPoint->GetPeerPort ());
+    }
+  else
+    {
+      tcpHeader.SetSourcePort (m_endPoint6->GetLocalPort ());
+      tcpHeader.SetDestinationPort (m_endPoint6->GetPeerPort ());
+    }
+  AddOptions (tcpHeader);
+  //Send a packet tag for setting ECT bits in IP header
+  if (m_tcb->m_ecnState != TcpSocketState::ECN_DISABLED)
+    {
+      SocketIpTosTag ipTosTag;
+      ipTosTag.SetTos (MarkEcnCodePoint (0, m_tcb->m_ectCodePoint));
+      p->AddPacketTag (ipTosTag);
+
+      SocketIpv6TclassTag ipTclassTag;
+      ipTclassTag.SetTclass (MarkEcnCodePoint (0, m_tcb->m_ectCodePoint));
+      p->AddPacketTag (ipTclassTag);
+    }
+  m_txTrace (p, tcpHeader, this);
+
+  if (m_endPoint != nullptr)
+    {
+      m_scpstp->SendPacket (p, tcpHeader, m_endPoint->GetLocalAddress (),
+                         m_endPoint->GetPeerAddress (), m_boundnetdevice);
+    }
+  else
+    {
+      m_scpstp->SendPacket (p, tcpHeader, m_endPoint6->GetLocalAddress (),
+                         m_endPoint6->GetPeerAddress (), m_boundnetdevice);
+    }
+
+  NS_LOG_LOGIC ("Schedule persist timeout at time "
+                << Simulator::Now ().GetSeconds () << " to expire at time "
+                << (Simulator::Now () + m_persistTimeout).GetSeconds ());
+  m_persistEvent = Simulator::Schedule (m_persistTimeout, &ScpsTpSocketBase::PersistTimeout, this);
 }
 
 
