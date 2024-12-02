@@ -43,6 +43,22 @@
 
 namespace ns3 {
 
+class Ipv4EndPoint;
+class Ipv6EndPoint;
+class Node;
+class Packet;
+class TcpL4Protocol;
+class TcpHeader;
+class TcpCongestionOps;
+class TcpRecoveryOps;
+class RttEstimator;
+class TcpRxBuffer;
+class TcpTxBuffer;
+class TcpOption;
+class Ipv4Interface;
+class Ipv6Interface;
+class TcpRateOps;
+
 class ScpsTpSocketBase : public TcpSocketBase
 {
 public:
@@ -99,7 +115,7 @@ public:
   virtual int Bind (void);    // Bind a socket by setting up endpoint in ScpsTpL4Protocol
   virtual int Bind6 (void);    // Bind a socket by setting up endpoint in ScpsTpL4Protocol
   virtual int Bind (const Address &address);         // ... endpoint of specific addr or port
-
+  virtual int Send (Ptr<Packet> p, uint32_t flags);  // Call by app to send data to network
 
 protected:
   /**
@@ -124,6 +140,13 @@ protected:
    * SetupCallback(), invoked when the endpoint is destroyed.
    */
   void Destroy (void);
+
+  /**
+   * \brief Common part of the two Bind(), i.e. set callback and remembering local addr:port
+   *
+   * \returns 0 on success, -1 on failure
+   */
+  int SetupCallback (void);
 
   /**
    * \brief Kill this socket by zeroing its attributes (IPv6)
@@ -175,6 +198,67 @@ protected:
    * \brief Send 1 byte probe to get an updated window size
    */
   virtual void PersistTimeout (void);
+
+  /**
+   * \brief Received a packet upon LISTEN state.
+   *
+   * \param packet the packet
+   * \param tcpHeader the packet's TCP header
+   * \param fromAddress the source address
+   * \param toAddress the destination address
+   */
+  void ProcessListen (Ptr<Packet> packet, const TcpHeader& tcpHeader,
+                      const Address& fromAddress, const Address& toAddress);
+  /**
+   * \brief Received a packet upon SYN_SENT
+   *
+   * \param packet the packet
+   * \param tcpHeader the packet's TCP header
+   */
+  void ProcessSynSent (Ptr<Packet> packet, const TcpHeader& tcpHeader);
+
+  /**
+   * \brief FIN is in sequence, notify app and respond with a FIN
+   */
+  void DoPeerClose (void);
+
+  /**
+   * \brief Timeout at LAST_ACK, close the connection
+   */
+  virtual void LastAckTimeout (void);
+
+  /**
+   * \brief Move from CLOSING or FIN_WAIT_2 to TIME_WAIT state
+   */
+  void TimeWait (void);
+
+  /**
+   * \brief Call CopyObject<> to clone me
+   * \returns a copy of the socket
+   */
+  virtual Ptr<ScpsTpSocketBase> ForkScpsTp (void);
+
+  /**
+   * \brief Update buffers w.r.t. ACK
+   * \param seq the sequence number
+   * \param resetRTO indicates if RTO should be reset
+   */
+  virtual void NewAck (SequenceNumber32 const& seq, bool resetRTO);
+
+  /**
+   * \brief Recv of a data, put into buffer, call L7 to get it if necessary
+   * \param packet the packet
+   * \param tcpHeader the packet's TCP header
+   */
+  virtual void ReceivedData (Ptr<Packet> packet, const TcpHeader& tcpHeader);
+
+  /**
+   * \brief The amount of Rx window announced to the peer
+   * \param scale indicate if the window should be scaled. True for
+   * almost all cases, except when we are sending a SYN
+   * \returns size of Rx window announced to the peer
+   */
+  virtual uint16_t AdvertisedWindowSize (bool scale = true) const;
 private:
 
 protected:

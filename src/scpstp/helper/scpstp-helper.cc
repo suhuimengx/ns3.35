@@ -19,8 +19,9 @@ ScpsTpHelper::InstallScpsTp (NodeContainer c) const
 
 void
 ScpsTpHelper::InstallScpsTp (Ptr<Node> node) const
-{
-   NS_LOG_INFO("stack install");
+{ 
+  NS_ASSERT (node != nullptr);
+  NS_LOG_INFO("stack install");
   Install (node);//目前两种解决方法，把这里面的Tcp协议删掉，或者放弃继承TcpL4Protocol
   NS_LOG_INFO("ok " << node);
   CreateAndAggregateObjectFromTypeId (node, "ns3::ScpsTpL4Protocol");
