@@ -305,8 +305,6 @@ private:
    */
   ObjectFactory m_tcpFactory;
 
-  ObjectFactory m_scpstpFactory;
-
   /**
    * \brief IPv4 routing helper.
    */
