@@ -835,7 +835,7 @@ protected:
   /**
    * \brief Deallocate m_endPoint and m_endPoint6
    */
-  void DeallocateEndPoint (void);
+  virtual void DeallocateEndPoint (void);
 
   /**
    * \brief Received a FIN from peer, notify rx buffer

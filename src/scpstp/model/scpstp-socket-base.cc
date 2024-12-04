@@ -81,13 +81,12 @@ ScpsTpSocketBase::GetTypeId(void)
                   MakeEnumAccessor(&ScpsTpSocketBase::m_lossType),
                   MakeEnumChecker(LossType::Corruption, "Corruption",
                                   LossType::Congestion, "Congestion",
-                                  LossType::Link_Outage, "Link_Outage"));
-    /*
+                                  LossType::Link_Outage, "Link_Outage"))
     .AddTraceSource("LossType",
                     "Reason for data loss",
                     MakeTraceSourceAccessor (&ScpsTpSocketBase::m_lossType),
                     "ns3::EnumValueCallback::String"
-                    );*/
+                    );
   return tid;
 }
 
@@ -98,7 +97,8 @@ ScpsTpSocketBase::GetInstanceTypeId () const
 }
 
 ScpsTpSocketBase::ScpsTpSocketBase(void)
-  : TcpSocketBase ()
+  : TcpSocketBase (),
+    m_lossType (Corruption)
 {
   NS_LOG_FUNCTION (this);
   m_txBuffer = CreateObject<TcpTxBuffer> ();
@@ -154,7 +154,6 @@ ScpsTpSocketBase::ScpsTpSocketBase(void)
   ok = m_tcb->TraceConnectWithoutContext ("RTT",
                                           MakeCallback (&ScpsTpSocketBase::UpdateRtt, this));
   NS_ASSERT (ok == true);
-  m_lossType = Corruption;
 }
 
 ScpsTpSocketBase::ScpsTpSocketBase(const ScpsTpSocketBase &sock)

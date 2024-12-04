@@ -166,7 +166,7 @@ protected:
   /**
    * \brief Deallocate m_endPoint and m_endPoint6
    */
-  void DeallocateEndPoint (void);
+  virtual void DeallocateEndPoint (void);
 
   /**
    * \brief Complete a connection by forking the socket
@@ -262,7 +262,7 @@ protected:
 private:
 
 protected:
-  LossType m_lossType;                       //!< the reason for data loss
+  TracedValue<LossType> m_lossType;                     //!< the reason for data loss
   Ptr<ScpsTpL4Protocol>  m_scpstp;                 //!< the associated ScpsTp L4 protocol  
 
 
