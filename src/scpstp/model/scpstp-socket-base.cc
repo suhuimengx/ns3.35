@@ -1467,4 +1467,155 @@ ScpsTpSocketBase::ForkScpsTp (void)
 {
   return CopyObject<ScpsTpSocketBase> (this);
 }
+
+// Sender should reduce the Congestion Window as a response to receiver's
+// ECN Echo notification only once per window
+void
+ScpsTpSocketBase::EnterCwr (uint32_t currentDelivered)
+{
+  NS_LOG_FUNCTION (this << currentDelivered);
+  m_tcb->m_ssThresh = m_congestionControl->GetSsThresh (m_tcb, BytesInFlight ());
+  NS_LOG_DEBUG ("Reduce ssThresh to " << m_tcb->m_ssThresh);
+  // Do not update m_cWnd, under assumption that recovery process will
+  // gradually bring it down to m_ssThresh.  Update the 'inflated' value of
+  // cWnd used for tracing, however.
+  m_tcb->m_cWndInfl = m_tcb->m_ssThresh;
+  NS_ASSERT (m_tcb->m_congState != TcpSocketState::CA_CWR);
+  NS_LOG_DEBUG (TcpSocketState::TcpCongStateName[m_tcb->m_congState] << " -> CA_CWR");
+  m_tcb->m_congState = TcpSocketState::CA_CWR;
+  // CWR state will be exited when the ack exceeds the m_recover variable.
+  // Do not set m_recoverActive (which applies to a loss-based recovery)
+  // m_recover corresponds to Linux tp->high_seq
+  m_recover = m_tcb->m_highTxMark;
+  if (!m_congestionControl->HasCongControl ())
+    {
+      // If there is a recovery algorithm, invoke it.
+      m_recoveryOps->EnterRecovery (m_tcb, m_dupAckCount, UnAckDataCount (), currentDelivered);
+      NS_LOG_INFO ("Enter CWR recovery mode; set cwnd to " << m_tcb->m_cWnd
+                    << ", ssthresh to " << m_tcb->m_ssThresh
+                    << ", recover to " << m_recover);
+    }
+}
+
+/* Process the newly received ACK */
+void
+ScpsTpSocketBase::ReceivedAck (Ptr<Packet> packet, const TcpHeader& tcpHeader)
+{
+  NS_LOG_FUNCTION (this << tcpHeader);
+
+  NS_ASSERT (0 != (tcpHeader.GetFlags () & TcpHeader::ACK));
+  NS_ASSERT (m_tcb->m_segmentSize > 0);
+
+  uint32_t previousLost = m_txBuffer->GetLost ();
+  uint32_t priorInFlight = m_tcb->m_bytesInFlight.Get ();
+
+  // RFC 6675, Section 5, 1st paragraph:
+  // Upon the receipt of any ACK containing SACK information, the
+  // scoreboard MUST be updated via the Update () routine (done in ReadOptions)
+  uint32_t bytesSacked = 0;
+  uint64_t previousDelivered = m_rateOps->GetConnectionRate ().m_delivered;
+  ReadOptions (tcpHeader, &bytesSacked);
+
+  SequenceNumber32 ackNumber = tcpHeader.GetAckNumber ();
+  SequenceNumber32 oldHeadSequence = m_txBuffer->HeadSequence ();
+
+  if (ackNumber < oldHeadSequence)
+    {
+      NS_LOG_DEBUG ("Possibly received a stale ACK (ack number < head sequence)");
+      // If there is any data piggybacked, store it into m_rxBuffer
+      if (packet->GetSize () > 0)
+        {
+          ReceivedData (packet, tcpHeader);
+        }
+      return;
+    }
+  if ((ackNumber > oldHeadSequence) && (ackNumber < m_recover)
+                                    && (m_tcb->m_congState == TcpSocketState::CA_RECOVERY))
+    {
+      uint32_t segAcked = (ackNumber - oldHeadSequence)/m_tcb->m_segmentSize;
+      for (uint32_t i = 0; i < segAcked; i++)
+        {
+          if (m_txBuffer->IsRetransmittedDataAcked (ackNumber - (i * m_tcb->m_segmentSize)))
+            {
+              m_tcb->m_isRetransDataAcked = true;
+              NS_LOG_DEBUG ("Ack Number " << ackNumber <<
+                            "is ACK of retransmitted packet.");
+            }
+        }
+    }
+
+  m_txBuffer->DiscardUpTo (ackNumber, MakeCallback (&TcpRateOps::SkbDelivered, m_rateOps));
+
+  uint32_t currentDelivered = static_cast<uint32_t> (m_rateOps->GetConnectionRate ().m_delivered - previousDelivered);
+  m_tcb->m_lastAckedSackedBytes = currentDelivered;
+
+  if (m_tcb->m_congState == TcpSocketState::CA_CWR && (ackNumber > m_recover))
+    {
+      // Recovery is over after the window exceeds m_recover
+      // (although it may be re-entered below if ECE is still set)
+      NS_LOG_DEBUG (TcpSocketState::TcpCongStateName[m_tcb->m_congState] << " -> CA_OPEN");
+      m_tcb->m_congState = TcpSocketState::CA_OPEN;
+      if (!m_congestionControl->HasCongControl ())
+        {
+           m_tcb->m_cWnd = m_tcb->m_ssThresh.Get ();
+           m_recoveryOps->ExitRecovery (m_tcb);
+           m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_COMPLETE_CWR);
+        }
+    }
+
+  if (ackNumber > oldHeadSequence && (m_tcb->m_ecnState != TcpSocketState::ECN_DISABLED) && (tcpHeader.GetFlags () & TcpHeader::ECE))
+    {
+      if (m_ecnEchoSeq < ackNumber)
+        {
+          NS_LOG_INFO ("Received ECN Echo is valid");
+          m_ecnEchoSeq = ackNumber;
+          NS_LOG_DEBUG (TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_ECE_RCVD");
+          //Set lossType to congestion
+          SetLossType (ScpsTpSocketBase::Congestion);
+          m_tcb->m_ecnState = TcpSocketState::ECN_ECE_RCVD;
+          if (m_tcb->m_congState != TcpSocketState::CA_CWR)
+            {
+              EnterCwr (currentDelivered);
+            }
+        }
+    }
+  else if (m_tcb->m_ecnState == TcpSocketState::ECN_ECE_RCVD && !(tcpHeader.GetFlags () & TcpHeader::ECE))
+    {
+      m_tcb->m_ecnState = TcpSocketState::ECN_IDLE;
+      //Set lossType to corruption(默认值)
+      SetLossType (ScpsTpSocketBase::Corruption);
+    }
+
+  // Update bytes in flight before processing the ACK for proper calculation of congestion window
+  NS_LOG_INFO ("Update bytes in flight before processing the ACK.");
+  BytesInFlight ();
+
+  // RFC 6675 Section 5: 2nd, 3rd paragraph and point (A), (B) implementation
+  // are inside the function ProcessAck
+  ProcessAck (ackNumber, (bytesSacked > 0), currentDelivered, oldHeadSequence);
+  m_tcb->m_isRetransDataAcked = false;
+
+  if (m_congestionControl->HasCongControl ())
+    {
+      uint32_t currentLost = m_txBuffer->GetLost ();
+      uint32_t lost = (currentLost > previousLost) ?
+            currentLost - previousLost :
+            previousLost - currentLost;
+      auto rateSample = m_rateOps->GenerateSample (currentDelivered, lost,
+                                              false, priorInFlight, m_tcb->m_minRtt);
+      auto rateConn = m_rateOps->GetConnectionRate ();
+      m_congestionControl->CongControl(m_tcb, rateConn, rateSample);
+    }
+
+  // If there is any data piggybacked, store it into m_rxBuffer
+  if (packet->GetSize () > 0)
+    {
+      ReceivedData (packet, tcpHeader);
+    }
+
+  // RFC 6675, Section 5, point (C), try to send more data. NB: (C) is implemented
+  // inside SendPendingData
+  SendPendingData (m_connected);
+}
+
 }

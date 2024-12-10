@@ -139,14 +139,14 @@ protected:
    * This is a callback function configured to m_endpoint in
    * SetupCallback(), invoked when the endpoint is destroyed.
    */
-  void Destroy (void);
+  virtual void Destroy (void);
 
   /**
    * \brief Common part of the two Bind(), i.e. set callback and remembering local addr:port
    *
    * \returns 0 on success, -1 on failure
    */
-  int SetupCallback (void);
+  virtual int SetupCallback (void);
 
   /**
    * \brief Kill this socket by zeroing its attributes (IPv6)
@@ -154,7 +154,7 @@ protected:
    * This is a callback function configured to m_endpoint in
    * SetupCallback(), invoked when the endpoint is destroyed.
    */
-  void Destroy6 (void);
+  virtual void Destroy6 (void);
 
   /**
    * \brief Send a empty packet that carries a flag, e.g., ACK
@@ -207,7 +207,7 @@ protected:
    * \param fromAddress the source address
    * \param toAddress the destination address
    */
-  void ProcessListen (Ptr<Packet> packet, const TcpHeader& tcpHeader,
+  virtual void ProcessListen (Ptr<Packet> packet, const TcpHeader& tcpHeader,
                       const Address& fromAddress, const Address& toAddress);
   /**
    * \brief Received a packet upon SYN_SENT
@@ -215,12 +215,12 @@ protected:
    * \param packet the packet
    * \param tcpHeader the packet's TCP header
    */
-  void ProcessSynSent (Ptr<Packet> packet, const TcpHeader& tcpHeader);
+  virtual void ProcessSynSent (Ptr<Packet> packet, const TcpHeader& tcpHeader);
 
   /**
    * \brief FIN is in sequence, notify app and respond with a FIN
    */
-  void DoPeerClose (void);
+  virtual void DoPeerClose (void);
 
   /**
    * \brief Timeout at LAST_ACK, close the connection
@@ -230,7 +230,7 @@ protected:
   /**
    * \brief Move from CLOSING or FIN_WAIT_2 to TIME_WAIT state
    */
-  void TimeWait (void);
+  virtual void TimeWait (void);
 
   /**
    * \brief Call CopyObject<> to clone me
@@ -238,6 +238,20 @@ protected:
    */
   virtual Ptr<ScpsTpSocketBase> ForkScpsTp (void);
 
+  /**
+   * \brief Enter CA_CWR state upon receipt of an ECN Echo
+   *
+   * \param currentDelivered Currently (S)ACKed bytes
+   */
+  virtual void EnterCwr (uint32_t currentDelivered);
+
+  /**
+   * \brief Received an ACK packet
+   * \param packet the packet
+   * \param tcpHeader the packet's TCP header
+   */
+  virtual void ReceivedAck (Ptr<Packet> packet, const TcpHeader& tcpHeader);
+  
   /**
    * \brief Update buffers w.r.t. ACK
    * \param seq the sequence number

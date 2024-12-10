@@ -747,6 +747,4 @@ ScpsTpL4Protocol::GetDownTarget6 (void) const
   return m_downTarget6;
 }
 
-
-
 } // namespace ns3
