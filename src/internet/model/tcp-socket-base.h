@@ -1057,7 +1057,7 @@ protected:
    *
    * \param currentDelivered Currently (S)ACKed bytes
    */
-  void EnterRecovery (uint32_t currentDelivered);
+  virtual void EnterRecovery (uint32_t currentDelivered);
 
   /**
    * \brief An RTO event happened

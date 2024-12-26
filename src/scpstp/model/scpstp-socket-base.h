@@ -267,6 +267,18 @@ protected:
   virtual void ReceivedData (Ptr<Packet> packet, const TcpHeader& tcpHeader);
 
   /**
+   * \brief An RTO event happened
+   */
+  virtual void ReTxTimeout (void);
+
+  /**
+   * \brief Enter the CA_RECOVERY, and retransmit the head
+   *
+   * \param currentDelivered Currently (S)ACKed bytes
+   */
+  virtual void EnterRecovery (uint32_t currentDelivered);
+
+  /**
    * \brief The amount of Rx window announced to the peer
    * \param scale indicate if the window should be scaled. True for
    * almost all cases, except when we are sending a SYN

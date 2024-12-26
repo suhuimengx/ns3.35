@@ -1571,7 +1571,7 @@ ScpsTpSocketBase::ReceivedAck (Ptr<Packet> packet, const TcpHeader& tcpHeader)
           m_ecnEchoSeq = ackNumber;
           NS_LOG_DEBUG (TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_ECE_RCVD");
           //Set lossType to congestion
-          SetLossType (ScpsTpSocketBase::Congestion);
+          //SetLossType (ScpsTpSocketBase::Congestion);
           m_tcb->m_ecnState = TcpSocketState::ECN_ECE_RCVD;
           if (m_tcb->m_congState != TcpSocketState::CA_CWR)
             {
@@ -1583,7 +1583,7 @@ ScpsTpSocketBase::ReceivedAck (Ptr<Packet> packet, const TcpHeader& tcpHeader)
     {
       m_tcb->m_ecnState = TcpSocketState::ECN_IDLE;
       //Set lossType to corruption(默认值)
-      SetLossType (ScpsTpSocketBase::Corruption);
+      //SetLossType (ScpsTpSocketBase::Corruption);
     }
 
   // Update bytes in flight before processing the ACK for proper calculation of congestion window
@@ -1616,6 +1616,248 @@ ScpsTpSocketBase::ReceivedAck (Ptr<Packet> packet, const TcpHeader& tcpHeader)
   // RFC 6675, Section 5, point (C), try to send more data. NB: (C) is implemented
   // inside SendPendingData
   SendPendingData (m_connected);
+}
+
+
+// Retransmit timeout
+void
+ScpsTpSocketBase::ReTxTimeout ()
+{
+  NS_LOG_FUNCTION (this);
+  NS_LOG_LOGIC (this << " ReTxTimeout Expired at time " << Simulator::Now ().GetSeconds ());
+  // If erroneous timeout in closed/timed-wait state, just return
+  if (m_state == CLOSED || m_state == TIME_WAIT)
+    {
+      return;
+    }
+
+  if (m_state == SYN_SENT)
+    {
+      NS_ASSERT (m_synCount > 0);
+      if (m_tcb->m_useEcn == TcpSocketState::On)
+        {
+          SendEmptyPacket (TcpHeader::SYN | TcpHeader::ECE | TcpHeader::CWR);
+        }
+      else
+        {
+          SendEmptyPacket (TcpHeader::SYN);
+        }
+      return;
+    }
+
+  // Retransmit non-data packet: Only if in FIN_WAIT_1 or CLOSING state
+  if (m_txBuffer->Size () == 0)
+    {
+      if (m_state == FIN_WAIT_1 || m_state == CLOSING)
+        { // Must have lost FIN, re-send
+          SendEmptyPacket (TcpHeader::FIN);
+        }
+      return;
+    }
+
+  NS_LOG_DEBUG ("Checking if Connection is Established");
+  // If all data are received (non-closing socket and nothing to send), just return
+  if (m_state <= ESTABLISHED && m_txBuffer->HeadSequence () >= m_tcb->m_highTxMark && m_txBuffer->Size () == 0)
+    {
+      NS_LOG_DEBUG ("Already Sent full data" << m_txBuffer->HeadSequence () << " " << m_tcb->m_highTxMark);
+      return;
+    }
+
+  if (m_dataRetrCount == 0)
+    {
+      NS_LOG_INFO ("No more data retries available. Dropping connection");
+      NotifyErrorClose ();
+      DeallocateEndPoint ();
+      return;
+    }
+  else
+    {
+      --m_dataRetrCount;
+    }
+
+  uint32_t inFlightBeforeRto = BytesInFlight ();
+  bool resetSack = !m_sackEnabled; // Reset SACK information if SACK is not enabled.
+                                   // The information in the TcpTxBuffer is guessed, in this case.
+
+  // Reset dupAckCount
+  m_dupAckCount = 0;
+  if (!m_sackEnabled)
+    {
+      m_txBuffer->ResetRenoSack ();
+    }
+
+  // From RFC 6675, Section 5.1
+  // [RFC2018] suggests that a TCP sender SHOULD expunge the SACK
+  // information gathered from a receiver upon a retransmission timeout
+  // (RTO) "since the timeout might indicate that the data receiver has
+  // reneged."  Additionally, a TCP sender MUST "ignore prior SACK
+  // information in determining which data to retransmit."
+  // It has been suggested that, as long as robust tests for
+  // reneging are present, an implementation can retain and use SACK
+  // information across a timeout event [Errata1610].
+  // The head of the sent list will not be marked as sacked, therefore
+  // will be retransmitted, if the receiver renegotiate the SACK blocks
+  // that we received.
+  m_txBuffer->SetSentListLost (resetSack);
+
+  // From RFC 6675, Section 5.1
+  // If an RTO occurs during loss recovery as specified in this document,
+  // RecoveryPoint MUST be set to HighData.  Further, the new value of
+  // RecoveryPoint MUST be preserved and the loss recovery algorithm
+  // outlined in this document MUST be terminated.
+  m_recover = m_tcb->m_highTxMark;
+  m_recoverActive = true;
+
+
+  // 如果m_losstype为congestion,则倍增RTO，调整cwnd和ssthresh，如果是corruption则直接重传数据
+  if(m_lossType == ScpsTpSocketBase::Congestion)
+    {
+      NS_LOG_DEBUG ("超时原因是congestion");
+      // RFC 6298, clause 2.5, double the timer
+      Time doubledRto = m_rto + m_rto;
+      m_rto = Min (doubledRto, Time::FromDouble (60,  Time::S));
+
+      // Empty RTT history
+      m_history.clear ();
+
+      // Please don't reset highTxMark, it is used for retransmission detection
+
+      // When a TCP sender detects segment loss using the retransmission timer
+      // and the given segment has not yet been resent by way of the
+      // retransmission timer, decrease ssThresh
+      if (m_tcb->m_congState != TcpSocketState::CA_LOSS || !m_txBuffer->IsHeadRetransmitted ())
+        {
+          m_tcb->m_ssThresh = m_congestionControl->GetSsThresh (m_tcb, inFlightBeforeRto);
+        }
+
+      // Cwnd set to 1 MSS 进入慢启动
+      m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_LOSS);
+      m_congestionControl->CongestionStateSet (m_tcb, TcpSocketState::CA_LOSS);
+      m_tcb->m_congState = TcpSocketState::CA_LOSS;
+      m_tcb->m_cWnd = m_tcb->m_segmentSize;
+      m_tcb->m_cWndInfl = m_tcb->m_cWnd;
+
+      m_pacingTimer.Cancel ();
+
+      NS_LOG_DEBUG ("RTO. Reset cwnd to " <<  m_tcb->m_cWnd << ", ssthresh to " <<
+                    m_tcb->m_ssThresh << ", restart from seqnum " <<
+                    m_txBuffer->HeadSequence () << " doubled rto to " <<
+                    m_rto.Get ().GetSeconds () << " s");
+
+      NS_ASSERT_MSG (BytesInFlight () == 0, "There are some bytes in flight after an RTO: " <<
+                    BytesInFlight ());
+
+      SendPendingData (m_connected);
+
+      NS_ASSERT_MSG (BytesInFlight () <= m_tcb->m_segmentSize,
+                    "In flight (" << BytesInFlight () <<
+                    ") there is more than one segment (" << m_tcb->m_segmentSize << ")");
+    }
+  else if(m_lossType == ScpsTpSocketBase::Corruption)
+    { //
+      NS_LOG_DEBUG ("超时原因是conrruption");
+      // Empty RTT history
+      m_history.clear ();
+
+      //进入CA_LOSS状态，但不重置cwnd和ssthresh
+      m_congestionControl->CongestionStateSet (m_tcb, TcpSocketState::CA_LOSS);
+      m_tcb->m_congState = TcpSocketState::CA_LOSS;
+
+      m_pacingTimer.Cancel ();
+
+      NS_ASSERT_MSG (BytesInFlight () == 0, "There are some bytes in flight after an RTO: " <<
+                    BytesInFlight ());
+
+      SendPendingData (m_connected);
+
+      //因为此时并为重置cwnd和ssthresh，所以SendPendingData会导致重传后的BytesInFlight大于1个MSS
+    }
+}
+
+void
+ScpsTpSocketBase::EnterRecovery (uint32_t currentDelivered)
+{
+  NS_LOG_FUNCTION (this);
+  NS_ASSERT (m_tcb->m_congState != TcpSocketState::CA_RECOVERY);
+
+  NS_LOG_DEBUG (TcpSocketState::TcpCongStateName[m_tcb->m_congState] <<
+                " -> CA_RECOVERY");
+
+  if (!m_sackEnabled)
+    {
+      // One segment has left the network, PLUS the head is lost
+      m_txBuffer->AddRenoSack ();
+      m_txBuffer->MarkHeadAsLost ();
+    }
+  else
+    {
+      if (!m_txBuffer->IsLost (m_txBuffer->HeadSequence ()))
+        {
+          // We received 3 dupacks, but the head is not marked as lost
+          // (received less than 3 SACK block ahead).
+          // Manually set it as lost.
+          m_txBuffer->MarkHeadAsLost ();
+        }
+    }
+
+  // RFC 6675, point (4):
+  // (4) Invoke fast retransmit and enter loss recovery as follows:
+  // (4.1) RecoveryPoint = HighData
+  m_recover = m_tcb->m_highTxMark;
+  m_recoverActive = true;
+  
+
+
+  //当m_losstype为congestion时，重置cwnd和ssthresh,之后再重传数据，当m_losstype为corruption时，直接重传数据
+  if(m_lossType == ScpsTpSocketBase::Congestion)
+    {
+      m_congestionControl->CongestionStateSet (m_tcb, TcpSocketState::CA_RECOVERY);
+      m_tcb->m_congState = TcpSocketState::CA_RECOVERY;
+      // (4.2) ssthresh = cwnd = (FlightSize / 2)
+      // If SACK is not enabled, still consider the head as 'in flight' for
+      // compatibility with old ns-3 versions
+      uint32_t bytesInFlight = m_sackEnabled ? BytesInFlight () : BytesInFlight () + m_tcb->m_segmentSize;
+      m_tcb->m_ssThresh = m_congestionControl->GetSsThresh (m_tcb, bytesInFlight);
+      if (!m_congestionControl->HasCongControl ())
+        {
+          m_recoveryOps->EnterRecovery (m_tcb, m_dupAckCount, UnAckDataCount (), currentDelivered);
+          NS_LOG_INFO (m_dupAckCount << " dupack. Enter fast recovery mode." <<
+                      "Reset cwnd to " << m_tcb->m_cWnd << ", ssthresh to " <<
+                      m_tcb->m_ssThresh << " at fast recovery seqnum " << m_recover <<
+                      " calculated in flight: " << bytesInFlight);
+        }
+      // (4.3) Retransmit the first data segment presumed dropped
+      DoRetransmit ();
+      // (4.4) Run SetPipe ()
+      // (4.5) Proceed to step (C)
+      // these steps are done after the ProcessAck function (SendPendingData)
+    }
+  else if(m_lossType == ScpsTpSocketBase::Corruption)
+    {
+      m_congestionControl->CongestionStateSet (m_tcb, TcpSocketState::CA_RECOVERY);
+      m_tcb->m_congState = TcpSocketState::CA_RECOVERY;
+      // (4.2) ssthresh = cwnd = (FlightSize / 2)
+      // If SACK is not enabled, still consider the head as 'in flight' for
+      // compatibility with old ns-3 versions
+      uint32_t bytesInFlight = m_sackEnabled ? BytesInFlight () : BytesInFlight () + m_tcb->m_segmentSize;
+      m_tcb->m_ssThresh = m_congestionControl->GetSsThresh (m_tcb, bytesInFlight);
+      if (!m_congestionControl->HasCongControl ())
+        {
+          m_recoveryOps->EnterRecovery (m_tcb, m_dupAckCount, UnAckDataCount (), currentDelivered);
+          NS_LOG_INFO (m_dupAckCount << " dupack. Enter fast recovery mode." <<
+                      "Reset cwnd to " << m_tcb->m_cWnd << ", ssthresh to " <<
+                      m_tcb->m_ssThresh << " at fast recovery seqnum " << m_recover <<
+                      " calculated in flight: " << bytesInFlight);
+        }
+      // (4.3) Retransmit the first data segment presumed dropped
+      DoRetransmit ();
+      // (4.4) Run SetPipe ()
+      // (4.5) Proceed to step (C)
+      // these steps are done after the ProcessAck function (SendPendingData)
+    }
+
+      
+ 
 }
 
 }
