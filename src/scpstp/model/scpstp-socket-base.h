@@ -278,6 +278,46 @@ protected:
    */
   virtual void EnterRecovery (uint32_t currentDelivered);
 
+ /**
+   * \brief Process a received ack
+   * \param ackNumber ack number
+   * \param scoreboardUpdated if true indicates that the scoreboard has been
+   * \param oldHeadSequence value of HeadSequence before ack
+   * updated with SACK information
+   * \param currentDelivered The number of bytes (S)ACKed
+   */
+  virtual void ProcessAck (const SequenceNumber32 &ackNumber, bool scoreboardUpdated,
+                           uint32_t currentDelivered, const SequenceNumber32 &oldHeadSequence);
+
+  /**
+   * \brief Send 1 byte probe to get an updated link state
+   */
+  virtual void LinkOutPersistTimeout (void);
+
+  /**
+   * \brief Return the max possible number of unacked bytes
+   * if m_lossType is LinkOut, return 0
+   * \returns the max possible number of unacked bytes
+   */
+  virtual uint32_t Window (void) const;
+  
+  /**
+   * \brief Received a packet upon ESTABLISHED state.
+   *
+   * This function is mimicking the role of tcp_rcv_established() in tcp_input.c in Linux kernel.
+   *
+   * \param packet the packet
+   * \param tcpHeader the packet's TCP header
+   */
+  virtual void ProcessEstablished (Ptr<Packet> packet, const TcpHeader& tcpHeader); // Received a packet upon ESTABLISHED state
+
+  /**
+   * \brief Dupack management
+   *
+   * \param currentDelivered Current (S)ACKed bytes
+   */
+  virtual void DupAck (uint32_t currentDelivered);
+
   /**
    * \brief The amount of Rx window announced to the peer
    * \param scale indicate if the window should be scaled. True for
@@ -290,7 +330,8 @@ private:
 protected:
   TracedValue<LossType> m_lossType;                     //!< the reason for data loss
   Ptr<ScpsTpL4Protocol>  m_scpstp;                 //!< the associated ScpsTp L4 protocol  
-
+  bool m_isCorruptionRecovery;                     //!< true if the recovery is due to corruption
+  EventId m_linkOutPersistEvent;                   //!< Link outage persist event
 
 };
 

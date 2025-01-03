@@ -870,7 +870,7 @@ protected:
    * \param packet the packet
    * \param tcpHeader the packet's TCP header
    */
-  void ProcessEstablished (Ptr<Packet> packet, const TcpHeader& tcpHeader); // Received a packet upon ESTABLISHED state
+  virtual void ProcessEstablished (Ptr<Packet> packet, const TcpHeader& tcpHeader); // Received a packet upon ESTABLISHED state
 
   /**
    * \brief Received a packet upon LISTEN state.
@@ -1043,7 +1043,7 @@ protected:
    *
    * \param currentDelivered Current (S)ACKed bytes
    */
-  void DupAck (uint32_t currentDelivered);
+  virtual void DupAck (uint32_t currentDelivered);
 
   /**
    * \brief Enter CA_CWR state upon receipt of an ECN Echo

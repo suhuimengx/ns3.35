@@ -8,6 +8,8 @@
 *.pyo
 
 *.cwnd
+*.ascii
+*.data
 *.dat
 *.log
 *.mob
