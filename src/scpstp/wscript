@@ -15,6 +15,10 @@ def build(bld):
         'model/scpstp-socket-factory-impl.cc',
         'model/scpstp-l4-protocol.cc',
         'model/scpstp-socket-base.cc',
+        'model/scpstp-option-snack.cc',
+        'model/scpstp-socket-state.cc',
+        'model/scpstp-tx-buffer.cc',
+        'model/scpstp-rx-buffer.cc',
         ]
 
     module_test = bld.create_ns3_module_test_library('scpstp')
@@ -36,6 +40,10 @@ def build(bld):
         'model/scpstp-socket-factory-impl.h',
         'model/scpstp-l4-protocol.h',
         'model/scpstp-socket-base.h',
+        'model/scpstp-option-snack.h',
+        'model/scpstp-socket-state.h',
+        'model/scpstp-tx-buffer.h',
+        'model/scpstp-rx-buffer.h',
         ]
 
     if bld.env.ENABLE_EXAMPLES:
