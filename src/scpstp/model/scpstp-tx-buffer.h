@@ -40,7 +40,17 @@ public:
   static TypeId GetTypeId (void);
 
   ScpsTpTxBuffer (uint32_t n = 0);
+
+  ScpsTpTxBuffer (const TcpTxBuffer &buffer);
+
+
   virtual ~ScpsTpTxBuffer (void);
+
+  /**
+   * \brief Get the sequence number of the buffer head
+   * \returns the first byte's sequence number
+   */
+  virtual SequenceNumber32 HeadSequence (void) const;
 
 private:
 

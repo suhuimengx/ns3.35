@@ -22,7 +22,7 @@
 #define NS_LOG_APPEND_CONTEXT \
   if (m_node) { std::clog << " [node " << m_node->GetId () << "] "; }
 
-#include "scpstp-socket-base.h"
+
 #include "ns3/abort.h"
 #include "ns3/node.h"
 #include "ns3/inet-socket-address.h"
@@ -59,6 +59,11 @@
 #include "ns3/tcp-congestion-ops.h"
 #include "ns3/tcp-recovery-ops.h"
 #include "ns3/tcp-rate-ops.h"
+#include "scpstp-socket-base.h"
+#include "scpstp-rx-buffer.h"
+#include "scpstp-tx-buffer.h"
+#include "scpstp-socket-state.h"
+#include "scpstp-option-snack.h"
 
 #include <math.h>
 #include <algorithm>
@@ -102,13 +107,15 @@ ScpsTpSocketBase::ScpsTpSocketBase(void)
     m_isCorruptionRecovery (false)
 {
   NS_LOG_FUNCTION (this);
-  m_txBuffer = CreateObject<TcpTxBuffer> ();
+  m_txBuffer = CreateObject<ScpsTpTxBuffer> ();
+  m_txBuffer->HeadSequence ();
   m_txBuffer->SetRWndCallback (MakeCallback (&ScpsTpSocketBase::GetRWnd, this));
   m_tcb      = CreateObject<TcpSocketState> ();
   m_rateOps  = CreateObject <TcpRateLinux> ();
 
-  m_tcb->m_rxBuffer = CreateObject<TcpRxBuffer> ();
-
+  m_tcb->m_rxBuffer = CreateObject<ScpsTpRxBuffer> ();
+  //检查m_rxBuffer是否是ScpsTpRxBuffer的实例
+  NS_ASSERT (m_tcb->m_rxBuffer->GetInstanceTypeId () == ScpsTpRxBuffer::GetTypeId ());
   m_tcb->m_pacingRate = m_tcb->m_maxPacingRate;
   m_pacingTimer.SetFunction (&ScpsTpSocketBase::NotifyPacingPerformed, this);
 
@@ -178,11 +185,14 @@ ScpsTpSocketBase::ScpsTpSocketBase(const ScpsTpSocketBase &sock)
   SetDataSentCallback (vPSUI);
   SetSendCallback (vPSUI);
   SetRecvCallback (vPS);
-  m_txBuffer = CopyObject (sock.m_txBuffer);
+  //m_txBuffer = CopyObject (dynamic_cast<Ptr<ScpsTpTxBuffer> >(sock.m_txBuffer));
+
+  m_txBuffer = Ptr<TcpTxBuffer> (new ScpsTpTxBuffer (*PeekPointer (sock.m_txBuffer)), false);
   m_txBuffer->SetRWndCallback (MakeCallback (&ScpsTpSocketBase::GetRWnd, this));
   m_tcb = CopyObject (sock.m_tcb);
-  m_tcb->m_rxBuffer = CopyObject (sock.m_tcb->m_rxBuffer);
-
+  //m_tcb->m_rxBuffer = CopyObject (sock.m_tcb->m_rxBuffer);
+  m_tcb->m_rxBuffer = Ptr<TcpRxBuffer> (new ScpsTpRxBuffer (*PeekPointer (sock.m_tcb->m_rxBuffer)), false);
+  NS_ASSERT (m_tcb->m_rxBuffer->GetInstanceTypeId () == ScpsTpRxBuffer::GetTypeId ());
   m_tcb->m_pacingRate = m_tcb->m_maxPacingRate;
   m_pacingTimer.SetFunction (&ScpsTpSocketBase::NotifyPacingPerformed, this);
 
@@ -1304,6 +1314,7 @@ ScpsTpSocketBase::ReceivedData (Ptr<Packet> p, const TcpHeader& tcpHeader)
 
   // Put into Rx buffer
   SequenceNumber32 expectedSeq = m_tcb->m_rxBuffer->NextRxSequence ();
+  NS_ASSERT (m_tcb->m_rxBuffer->GetInstanceTypeId () == ScpsTpRxBuffer::GetTypeId ());
   if (!m_tcb->m_rxBuffer->Add (p, tcpHeader))
     { // Insert failed: No data or RX buffer full
       if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD || m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE)
@@ -1692,7 +1703,7 @@ ScpsTpSocketBase::ReTxTimeout ()
 
   uint32_t inFlightBeforeRto = BytesInFlight ();
   bool resetSack = !m_sackEnabled; // Reset SACK information if SACK is not enabled.
-                                   // The information in the TcpTxBuffer is guessed, in this case.
+                                   // The information in the ScpsTpTxBuffer is guessed, in this case.
 
   // Reset dupAckCount
   m_dupAckCount = 0;
@@ -2438,6 +2449,18 @@ ScpsTpSocketBase::ProcessEstablished (Ptr<Packet> packet, const TcpHeader& tcpHe
         }
       CloseAndNotify ();
     }
+}
+void
+ScpsTpSocketBase::AddOptionSnack(TcpHeader &header, uint16_t hole1Offset, uint16_t hole1Size)
+{
+  //calculation of the option is done in the SendEmptyPacket function
+  NS_LOG_FUNCTION (this);
+  Ptr<ScpsTpOptionSnack> option = Create<ScpsTpOptionSnack> ();
+  option->SetHole1Offset (hole1Offset);
+  option->SetHole1Size (hole1Size);
+  header.AddOption (option);
+  
+  NS_LOG_INFO (m_node->GetId () << " Add option SNACK " << *option);
 }
 
 }

@@ -61,6 +61,7 @@ public:
    */
   ScpstpSocketState (const ScpstpSocketState &other);
 
+  Ptr<ScpsTpRxBuffer> m_scpstprxbuffer; //!< The SCPSTP receive buffer
 
 };
 

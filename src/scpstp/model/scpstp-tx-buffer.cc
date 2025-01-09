@@ -50,8 +50,19 @@ ScpsTpTxBuffer::ScpsTpTxBuffer (uint32_t n)
 {
 }
 
+ScpsTpTxBuffer::ScpsTpTxBuffer (const TcpTxBuffer &buffer)
+  : TcpTxBuffer (buffer)
+{
+}
 ScpsTpTxBuffer::~ScpsTpTxBuffer (void)
 {
+}
+
+SequenceNumber32
+ScpsTpTxBuffer::HeadSequence (void) const
+{
+  NS_LOG_FUNCTION (this);
+  return m_firstByteSeq;
 }
 
 

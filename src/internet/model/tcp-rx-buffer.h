@@ -147,7 +147,7 @@ public:
    * \param tcph packet's TCP header
    * \return True when success, false otherwise.
    */
-  bool Add (Ptr<Packet> p, TcpHeader const& tcph);
+  virtual bool Add (Ptr<Packet> p, TcpHeader const& tcph);
 
   /**
    * Extract data from the head of the buffer as indicated by nextRxSeq.
@@ -181,7 +181,7 @@ public:
    */
   bool GotFin () const { return m_gotFin; }
 
-private:
+protected:
   /**
    * \brief Update the sack list, with the block seq starting at the beginning
    *
@@ -200,7 +200,7 @@ private:
    * \param head sequence number of the block at the beginning
    * \param tail sequence number of the block at the end
    */
-  void UpdateSackList (const SequenceNumber32 &head, const SequenceNumber32 &tail);
+  virtual void UpdateSackList (const SequenceNumber32 &head, const SequenceNumber32 &tail);
 
   /**
    * \brief Remove old blocks from the sack list
@@ -213,7 +213,7 @@ private:
    *
    * \param seq Last sequence to remove
    */
-  void ClearSackList (const SequenceNumber32 &seq);
+  virtual void ClearSackList (const SequenceNumber32 &seq);
 
   TcpOptionSack::SackList m_sackList; //!< Sack list (updated constantly)
 

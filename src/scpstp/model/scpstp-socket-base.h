@@ -325,6 +325,13 @@ protected:
    * \returns size of Rx window announced to the peer
    */
   virtual uint16_t AdvertisedWindowSize (bool scale = true) const;
+
+    /**
+   * \brief Add the SNACK option to the header
+   *
+   * \param header TcpHeader where the method should add the option
+   */
+  void AddOptionSnack (TcpHeader& header, uint16_t hole1Offset, uint16_t hole1Size);
 private:
 
 protected:

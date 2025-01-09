@@ -140,7 +140,7 @@ public:
    * \brief Get the sequence number of the buffer head
    * \returns the first byte's sequence number
    */
-  SequenceNumber32 HeadSequence (void) const;
+  virtual SequenceNumber32 HeadSequence (void) const;
 
   /**
    * \brief Get the sequence number of the buffer tail (plus one)
@@ -407,7 +407,7 @@ public:
    */
   void SetRWndCallback (Callback<uint32_t> rWndCallback);
 
-private:
+protected:
   friend std::ostream & operator<< (std::ostream & os, TcpTxBuffer const & tcpTxBuf);
 
   typedef std::list<TcpTxItem*> PacketList; //!< container for data stored in the buffer
