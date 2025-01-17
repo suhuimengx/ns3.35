@@ -108,7 +108,7 @@ ScpsTpSocketBase::ScpsTpSocketBase(void)
 {
   NS_LOG_FUNCTION (this);
   m_txBuffer = CreateObject<ScpsTpTxBuffer> ();
-  m_txBuffer->HeadSequence ();
+
   m_txBuffer->SetRWndCallback (MakeCallback (&ScpsTpSocketBase::GetRWnd, this));
   m_tcb      = CreateObject<TcpSocketState> ();
   m_rateOps  = CreateObject <TcpRateLinux> ();
@@ -737,6 +737,30 @@ ScpsTpSocketBase::SendEmptyPacket (uint8_t flags)
         {
           AddOptionSack (header);
         }
+      if(m_tcb->m_rxBuffer->GetSnackListSize () > 0)
+        {
+          ScpsTpOptionSnack::SnackList snackList = m_tcb->m_rxBuffer->GetSnackList ();
+
+          //Caclculate the number of snack options can be added to this ACK
+          uint8_t optionLenAvail = header.GetMaxOptionLength() - header.GetOptionLength();
+          uint8_t allowedSnackOptions = optionLenAvail / 6;
+
+          ScpsTpOptionSnack::SnackList::iterator i;
+          uint16_t hole1Offset,hole1Size;
+
+          for (i = snackList.begin(); allowedSnackOptions > 0 && i != snackList.end(); ++i)
+          { 
+            //CCSDS 3.2.5.3 ,3.2.5.4: hole1Offset计算产生的余数补偿到hole1Size, 并对hole1Size向上取整
+            uint32_t rawOffset = ((*i).first - m_tcb->m_rxBuffer->NextRxSequence());
+            hole1Offset = static_cast<uint16_t>(rawOffset / m_tcb->m_segmentSize);
+            uint32_t offsetRemainder = rawOffset % m_tcb->m_segmentSize;
+            uint32_t rawSize = ((*i).second - (*i).first);
+            hole1Size = static_cast<uint16_t>((rawSize + offsetRemainder + m_tcb->m_segmentSize - 1) / m_tcb->m_segmentSize);
+            
+            AddOptionSnack (header, hole1Offset, hole1Size);
+            allowedSnackOptions--;
+          }
+        }
       NS_LOG_INFO ("Sending a pure ACK, acking seq " << m_tcb->m_rxBuffer->NextRxSequence ());
     }
 
@@ -1349,10 +1373,12 @@ ScpsTpSocketBase::ReceivedData (Ptr<Packet> p, const TcpHeader& tcpHeader)
           return;
         }
     }
+    /*
   // Now send a new ACK packet acknowledging all received and delivered data
   if (m_tcb->m_rxBuffer->Size () > m_tcb->m_rxBuffer->Available () || m_tcb->m_rxBuffer->NextRxSequence () > expectedSeq + p->GetSize ())
     { // A gap exists in the buffer, or we filled a gap: Always ACK
       m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_NON_DELAYED_ACK);
+
       if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD || m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE)
         {
           SendEmptyPacket (TcpHeader::ACK | TcpHeader::ECE);
@@ -1361,6 +1387,7 @@ ScpsTpSocketBase::ReceivedData (Ptr<Packet> p, const TcpHeader& tcpHeader)
         }
       else
         {
+
           SendEmptyPacket (TcpHeader::ACK);
         }
     }
@@ -1396,6 +1423,38 @@ ScpsTpSocketBase::ReceivedData (Ptr<Packet> p, const TcpHeader& tcpHeader)
                         (Simulator::Now () + Simulator::GetDelayLeft (m_delAckEvent)).GetSeconds ());
         }
     }
+  */
+  // Now send a new ACK packet acknowledging all received and delivered data
+  //无论是否是乱序包，都按照delACK的逻辑发送ACK
+  if (++m_delAckCount >= m_delAckMaxCount)
+  {
+    m_delAckEvent.Cancel ();
+    m_delAckCount = 0;
+    m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_NON_DELAYED_ACK);
+    if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD || m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE)
+      {
+        NS_LOG_DEBUG("Congestion algo " << m_congestionControl->GetName ());
+        SendEmptyPacket (TcpHeader::ACK | TcpHeader::ECE);
+        NS_LOG_DEBUG (TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_SENDING_ECE");
+        m_tcb->m_ecnState = TcpSocketState::ECN_SENDING_ECE;
+      }
+    else
+      {
+        SendEmptyPacket (TcpHeader::ACK);
+      }
+  }
+else if (!m_delAckEvent.IsExpired ())
+  {
+    m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
+  }
+else if (m_delAckEvent.IsExpired ())
+  {
+    m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
+    m_delAckEvent = Simulator::Schedule (m_delAckTimeout,
+                                        &ScpsTpSocketBase::DelAckTimeout, this);
+    NS_LOG_LOGIC (this << " scheduled delayed ACK at " <<
+                  (Simulator::Now () + Simulator::GetDelayLeft (m_delAckEvent)).GetSeconds ());
+  }
 }
 
 // Called by the ReceivedAck() when new ACK received and by ProcessSynRcvd()
@@ -1596,7 +1655,7 @@ ScpsTpSocketBase::ReceivedAck (Ptr<Packet> packet, const TcpHeader& tcpHeader)
           NS_LOG_INFO ("Received ECN Echo is valid");
           m_ecnEchoSeq = ackNumber;
           NS_LOG_DEBUG (TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_ECE_RCVD");
-          //Set lossType to congestion
+          //ECN: Set lossType to congestion
           SetLossType (ScpsTpSocketBase::Congestion);
           m_tcb->m_ecnState = TcpSocketState::ECN_ECE_RCVD;
           if (m_tcb->m_congState != TcpSocketState::CA_CWR)
@@ -1812,7 +1871,7 @@ ScpsTpSocketBase::EnterRecovery (uint32_t currentDelivered)
   if (!m_sackEnabled)
     {
       // One segment has left the network, PLUS the head is lost
-      m_txBuffer->AddRenoSack ();
+      //m_txBuffer->AddRenoSack ();
       m_txBuffer->MarkHeadAsLost ();
     }
   else
@@ -2225,12 +2284,15 @@ ScpsTpSocketBase::DupAck (uint32_t currentDelivered)
 
   if (m_tcb->m_congState == TcpSocketState::CA_RECOVERY)
     {
+      // because SCPSTP 不会因为recovery减小cwnd，所以这个接收到的dupack不能出发RenoSack
+      /*
       if (!m_sackEnabled)
         {
           // If we are in recovery and we receive a dupack, one segment
           // has left the network. This is equivalent to a SACK of one block.
           m_txBuffer->AddRenoSack ();
         }
+      */
       if (!m_congestionControl->HasCongControl ())
         {
           m_recoveryOps->DoRecovery (m_tcb, currentDelivered);
@@ -2283,12 +2345,15 @@ ScpsTpSocketBase::DupAck (uint32_t currentDelivered)
           // Not clear in RFC. We don't do this here, since we still have
           // to retransmit the segment.
 
+          //同样，SCPSTP不会因为recovery减小cwnd，所以这个接收到的dupack不能触发RenoSack
+          /*
           if (!m_sackEnabled && m_limitedTx)
             {
               m_txBuffer->AddRenoSack ();
 
               // In limited transmit, cwnd Infl is not updated.
             }
+          */
         }
     }
 }
@@ -2454,13 +2519,69 @@ void
 ScpsTpSocketBase::AddOptionSnack(TcpHeader &header, uint16_t hole1Offset, uint16_t hole1Size)
 {
   //calculation of the option is done in the SendEmptyPacket function
-  NS_LOG_FUNCTION (this);
+  NS_LOG_FUNCTION (this << header << hole1Offset << hole1Size);
   Ptr<ScpsTpOptionSnack> option = Create<ScpsTpOptionSnack> ();
   option->SetHole1Offset (hole1Offset);
   option->SetHole1Size (hole1Size);
-  header.AddOption (option);
-  
+  header.AppendOption (option);
   NS_LOG_INFO (m_node->GetId () << " Add option SNACK " << *option);
 }
 
+void
+ScpsTpSocketBase::ReadOptions (const TcpHeader &tcpHeader, uint32_t *bytesSacked)
+{
+  NS_LOG_FUNCTION (this << tcpHeader);
+  TcpHeader::TcpOptionList::const_iterator it;
+  const TcpHeader::TcpOptionList options = tcpHeader.GetOptionList ();
+
+  ScpsTpOptionSnack::SnackList snackList_temp;
+
+  uint16_t hole1Offset_temp = 0;
+  uint16_t hole1Size_temp = 0;
+  for (it = options.begin (); it != options.end (); ++it)
+    {
+      const Ptr<const TcpOption> option = (*it);
+
+      // Check only for ACK options here
+      switch (option->GetKind ())
+        {
+        case TcpOption::SACK:
+          *bytesSacked = ProcessOptionSack (option);
+          break;
+        case TcpOption::SNACK:
+          {
+            Ptr<const ScpsTpOptionSnack> s1 = DynamicCast<const ScpsTpOptionSnack> (option);
+            hole1Offset_temp = s1->GetHole1Offset ();
+            hole1Size_temp = s1->GetHole1Size ();
+            NS_LOG_INFO ("SNACK option received: hole1Offset = " << hole1Offset_temp << ", hole1Size = " << hole1Size_temp);
+
+            ProcessOptionSnack (option, snackList_temp, tcpHeader.GetAckNumber ().GetValue ());
+            break;
+          }
+        default:
+          continue;
+        }
+    }
+  if (!snackList_temp.empty ())
+    {
+      m_txBuffer->UpdateSnackedData (snackList_temp);
+      NS_LOG_INFO ("SNACK option received");
+      //是不是要重发数据
+    }
 }
+
+void
+ScpsTpSocketBase::ProcessOptionSnack (const Ptr<const TcpOption> option, ScpsTpOptionSnack::SnackList& snackList, uint32_t ackNumber)
+{
+  NS_LOG_FUNCTION (this << option);
+  Ptr<const ScpsTpOptionSnack> s = DynamicCast<const ScpsTpOptionSnack> (option);
+  ScpsTpOptionSnack::SnackHole hole ;
+  SequenceNumber32 holeLeftEdge = SequenceNumber32(ackNumber + s->GetHole1Offset () * m_tcb->m_segmentSize);
+  SequenceNumber32 holeRightEdge = SequenceNumber32(ackNumber + (s->GetHole1Offset () + s->GetHole1Size ()) * m_tcb->m_segmentSize);
+  
+  hole = ScpsTpOptionSnack::SnackHole(holeLeftEdge, holeRightEdge);
+  snackList.push_back(hole);
+  // 对txBuffer的更新在ReadOptions函数中进行
+}
+
+} // namespace ns3

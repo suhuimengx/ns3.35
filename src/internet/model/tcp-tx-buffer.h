@@ -27,6 +27,7 @@
 #include "ns3/sequence-number.h"
 #include "ns3/tcp-option-sack.h"
 #include "ns3/tcp-tx-item.h"
+#include "ns3/scpstp-option-snack.h"
 
 namespace ns3 {
 class Packet;
@@ -140,7 +141,7 @@ public:
    * \brief Get the sequence number of the buffer head
    * \returns the first byte's sequence number
    */
-  virtual SequenceNumber32 HeadSequence (void) const;
+  SequenceNumber32 HeadSequence (void) const;
 
   /**
    * \brief Get the sequence number of the buffer tail (plus one)
@@ -407,6 +408,8 @@ public:
    */
   void SetRWndCallback (Callback<uint32_t> rWndCallback);
 
+  virtual void UpdateSnackedData (const ScpsTpOptionSnack::SnackList &snackList);
+
 protected:
   friend std::ostream & operator<< (std::ostream & os, TcpTxBuffer const & tcpTxBuf);
 
@@ -559,7 +562,7 @@ protected:
    * \param listEdited output parameter which indicates if the list has been edited
    * \return the item that contains the right packet
    */
-  TcpTxItem* GetPacketFromList (PacketList &list, const SequenceNumber32 &startingSeq,
+  virtual TcpTxItem* GetPacketFromList (PacketList &list, const SequenceNumber32 &startingSeq,
                                 uint32_t numBytes, const SequenceNumber32 &requestedSeq,
                                 bool *listEdited = nullptr) const;
 
@@ -573,7 +576,7 @@ protected:
    * \param t1 first item
    * \param t2 second item
    */
-  void MergeItems (TcpTxItem *t1, TcpTxItem *t2) const;
+  virtual void MergeItems (TcpTxItem *t1, TcpTxItem *t2) const;
 
   /**
    * \brief Split one TcpTxItem

@@ -305,7 +305,7 @@ ScpsTpRxBuffer::UpdateSnackList(void)
 
   //调试信息：打印snack list和sack list
   NS_LOG_INFO("UpdateSnackList:");
-
+  NS_LOG_INFO("sequence number:" << m_nextRxSeq.Get());
   NS_LOG_INFO("Sack list:");
   for (TcpOptionSack::SackList::iterator it = m_sackList.begin(); it != m_sackList.end(); ++it)
   {
@@ -325,7 +325,7 @@ ScpsTpRxBuffer::ClearSnackList(const SequenceNumber32 &seq)
   ScpsTpOptionSnack::SnackList::iterator it;
   for(it = m_snackList.begin(); it != m_snackList.end(); )
   {
-    ScpsTpOptionSnack::SnackHole hole = *it;
+    ScpsTpOptionSnack::SnackHole &hole = *it;//hole是引用，通过修改hole改变m_snackList中的值
     if (hole.second <= seq) {
         it = m_snackList.erase(it);
     }

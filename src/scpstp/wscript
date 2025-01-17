@@ -19,6 +19,7 @@ def build(bld):
         'model/scpstp-socket-state.cc',
         'model/scpstp-tx-buffer.cc',
         'model/scpstp-rx-buffer.cc',
+        'model/scpstp-vegas.cc',
         ]
 
     module_test = bld.create_ns3_module_test_library('scpstp')
@@ -44,6 +45,7 @@ def build(bld):
         'model/scpstp-socket-state.h',
         'model/scpstp-tx-buffer.h',
         'model/scpstp-rx-buffer.h',
+        'model/scpstp-vegas.h',
         ]
 
     if bld.env.ENABLE_EXAMPLES:

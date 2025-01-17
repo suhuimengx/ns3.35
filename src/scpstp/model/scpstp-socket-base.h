@@ -326,12 +326,33 @@ protected:
    */
   virtual uint16_t AdvertisedWindowSize (bool scale = true) const;
 
-    /**
+  /**
    * \brief Add the SNACK option to the header
    *
    * \param header TcpHeader where the method should add the option
    */
   void AddOptionSnack (TcpHeader& header, uint16_t hole1Offset, uint16_t hole1Size);
+
+  /**
+   * \brief Read TCP options before Ack processing
+   *
+   * Timestamp and Window scale are managed in other pieces of code.
+   *
+   * \param tcpHeader Header of the segment
+   * \param [out] bytesSacked Number of bytes SACKed, or 0
+   */
+  virtual void ReadOptions (const TcpHeader &tcpHeader, uint32_t *bytesSacked);
+
+  /**
+   * \brief Read the SNACK option ,update the snack list and then pass it to the TxBuffer
+   *
+   * \param option SNACK option from the header
+   * \param snackList_temp the temporary snack list
+   * \param ackNumber the ack number
+   * 
+   */
+  void ProcessOptionSnack(const Ptr<const TcpOption> option, ScpsTpOptionSnack::SnackList& snackList, uint32_t ackNumber);
+
 private:
 
 protected:

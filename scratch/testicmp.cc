@@ -19,6 +19,7 @@
 #include "ns3/icmpv4-l4-protocol.h"
 #include "ns3/v4ping-helper.h"
 #include "ns3/animation-interface.h"
+
 using namespace ns3;
 
 
@@ -81,6 +82,7 @@ int main(int argc, char *argv[])
 
   NS_LOG_INFO ("Initialize Global Routing.");
   Ipv4GlobalRoutingHelper::PopulateRoutingTables ();//初始化自动计算并填充路由表
+  
 
   // 客户端安装ping应用
   Time interPacketInterval = Seconds(1);

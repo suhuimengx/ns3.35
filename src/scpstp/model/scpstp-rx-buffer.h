@@ -64,27 +64,15 @@ public:
    *
    * \return a list of isolated holes
    */
-  ScpsTpOptionSnack::SnackList GetSnackList (void) const;
+  virtual ScpsTpOptionSnack::SnackList GetSnackList (void) const;
 
   /**
    * \brief Get the size of the snack list
    *
    * \return the size of the snack list
    */
-  uint32_t GetSnackListSize (void) const;
+  virtual uint32_t GetSnackListSize (void) const;
 
-  /**
-   * Insert a packet into the buffer and update the availBytes counter to
-   * reflect the number of bytes ready to send to the application. This
-   * function handles overlap by triming the head of the inputted packet and
-   * removing data from the buffer that overlaps the tail of the inputted
-   * packet
-   *
-   * \param p packet
-   * \param tcph packet's TCP header
-   * \return True when success, false otherwise.
-   */
-  //virtual bool Add (Ptr<Packet> p, TcpHeader const& tcph) override;
 
 protected:
   virtual void UpdateSackList (const SequenceNumber32 &head, const SequenceNumber32 &tail) override;

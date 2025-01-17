@@ -105,6 +105,7 @@ private:
   // Only TcpTxBuffer is allowed to touch this part of the TcpTxItem, to manage
   // its internal lists and counters
   friend class TcpTxBuffer;
+  friend class ScpsTpTxBuffer;
 
   SequenceNumber32 m_startSeq {0};   //!< Sequence number of the item (if transmitted)
   Ptr<Packet> m_packet {nullptr};    //!< Application packet (can be null)

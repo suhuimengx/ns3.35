@@ -405,4 +405,18 @@ TcpRxBuffer::Extract (uint32_t maxSize)
   return outPkt;
 }
 
+ScpsTpOptionSnack::SnackList 
+TcpRxBuffer::GetSnackList (void) const
+{
+  NS_LOG_FUNCTION (this);
+  return m_snackList;
+}
+
+uint32_t 
+TcpRxBuffer::GetSnackListSize (void) const
+{
+  NS_LOG_FUNCTION (this);
+  return static_cast<uint32_t> (m_snackList.size ());
+}
+
 } //namespace ns3

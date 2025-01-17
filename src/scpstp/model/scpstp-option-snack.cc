@@ -62,14 +62,6 @@ ScpsTpOptionSnack::GetInstanceTypeId (void) const
 void
 ScpsTpOptionSnack::Print (std::ostream &os) const
 {
-  
-  /*
-  os << "holes: " << GetNumSnackHoles () << ",";
-  for (SnackList::const_iterator it = m_snackList.begin (); it != m_snackList.end (); ++it)
-    {
-      os << "[" << it->first << "," << it->second << "]";
-    }
-  */
  os << "hole1offset: " << m_hole1Offset << ", hole1size: " << m_hole1Size;
 }
 
@@ -85,25 +77,14 @@ void
 ScpsTpOptionSnack::Serialize (Buffer::Iterator start) const
 {
   NS_LOG_FUNCTION (this);
+  NS_LOG_INFO("Serializing SNACK option:" << m_hole1Offset << " " << m_hole1Size);
   Buffer::Iterator i = start;
   i.WriteU8 (GetKind ()); // Kind in the first byte
   uint8_t length =  6; // 2  for the kind and length, 2  for hole1 offset, 2 for hole1 size
   i.WriteU8 (length); // Length
   i.WriteHtonU16 (m_hole1Offset); // Hole1 offset
   i.WriteHtonU16 (m_hole1Size);   // Hole1 size
-/*
-  for (SnackList::const_iterator it = m_snackList.begin (); it != m_snackList.end (); ++it)
-    {
-      SequenceNumber32 leftEdge = it->first;
-      SequenceNumber32 rightEdge = it->second;
-      i.WriteHtonU32 (leftEdge.GetValue ());   // Left edge of the hole
-      i.WriteHtonU32 (rightEdge.GetValue ());  // Right edge of the hole
-    }
-  SequenceNumber32 hole1leftEdge = m_snackList.front ().first;
-  SequenceNumber32 hole1rightEdge = m_snackList.front ().second;
-  i.WriteHtonU16 (static_cast<uint16_t>(hole1leftEdge.GetValue ()- acknumber.GetValue ())/);   // Hole1 offset
-  i.WriteHtonU16 (hole1rightEdge.GetValue () - hole1leftEdge.GetValue ());  // Hole1 size
-*/
+
 }
 
 uint32_t

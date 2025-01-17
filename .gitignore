@@ -9,6 +9,7 @@
 
 *.cwnd
 *.ascii
+*.xml
 *.data
 *.dat
 *.log

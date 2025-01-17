@@ -1102,7 +1102,7 @@ protected:
    * \param tcpHeader Header of the segment
    * \param [out] bytesSacked Number of bytes SACKed, or 0
    */
-  void ReadOptions (const TcpHeader &tcpHeader, uint32_t *bytesSacked);
+  virtual void ReadOptions (const TcpHeader &tcpHeader, uint32_t *bytesSacked);
 
   /**
    * \brief Return true if the specified option is enabled

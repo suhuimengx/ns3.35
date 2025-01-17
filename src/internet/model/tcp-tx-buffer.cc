@@ -1506,4 +1506,10 @@ operator<< (std::ostream & os, TcpTxBuffer const & tcpTxBuf)
   return os;
 }
 
+void
+TcpTxBuffer::UpdateSnackedData(const ScpsTpOptionSnack::SnackList &snackList)
+{
+  NS_LOG_FUNCTION (this);
+}
+
 } // namespace ns3
