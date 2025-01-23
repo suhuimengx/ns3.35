@@ -31,7 +31,7 @@ namespace ns3 {
 /* see http://www.iana.org/assignments/protocol-numbers */
 const uint8_t TCP_PROT_NUMBER = 6;  //!< TCP Protocol number
 const uint8_t UDP_PROT_NUMBER = 17; //!< UDP Protocol number
-
+const uint8_t SCPSTP_PROT_NUMBER = 105; //!< SCTP Protocol number
 
 
 bool operator < (const Ipv6FlowClassifier::FiveTuple &t1,
@@ -116,7 +116,7 @@ Ipv6FlowClassifier::Classify (const Ipv6Header &ipHeader, Ptr<const Packet> ipPa
   tuple.destinationAddress = ipHeader.GetDestination ();
   tuple.protocol = ipHeader.GetNextHeader ();
 
-  if ((tuple.protocol != UDP_PROT_NUMBER) && (tuple.protocol != TCP_PROT_NUMBER))
+  if ((tuple.protocol != UDP_PROT_NUMBER) && (tuple.protocol != TCP_PROT_NUMBER) && (tuple.protocol != SCPSTP_PROT_NUMBER))
     {
       return false;
     }

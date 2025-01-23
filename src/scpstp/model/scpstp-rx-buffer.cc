@@ -286,6 +286,7 @@ ScpsTpRxBuffer::ClearSackList (const SequenceNumber32 &seq)
 void
 ScpsTpRxBuffer::UpdateSnackList(void)
 {
+  /*
   m_snackList.clear();
   TcpOptionSack::SackList::iterator it = m_sackList.begin();
   TcpOptionSack::SackBlock begin = *it;
@@ -299,6 +300,36 @@ ScpsTpRxBuffer::UpdateSnackList(void)
       begin = *it;
       ++it;
   }
+  hole = ScpsTpOptionSnack::SnackHole(m_nextRxSeq.Get(), begin.first);
+  m_snackList.push_front(hole);
+  */
+ // 清空原有的 snackList
+  m_snackList.clear();
+
+  // 创建 sackList 的副本并进行排序
+  TcpOptionSack::SackList sackListCopy = m_sackList; 
+  if(sackListCopy.size() > 1) {
+    sackListCopy.sort([](const TcpOptionSack::SackBlock& a, const TcpOptionSack::SackBlock& b) {
+    return a.first > b.first;  
+    });
+  }
+
+
+  // 使用排序后的副本生成 snackHole
+  TcpOptionSack::SackList::iterator it = sackListCopy.begin();
+  TcpOptionSack::SackBlock begin = *it;
+  ScpsTpOptionSnack::SnackHole hole;
+  ++it;
+
+  while (it != sackListCopy.end()) {
+      TcpOptionSack::SackBlock next = *it;
+      hole = ScpsTpOptionSnack::SnackHole(next.second, begin.first);
+      m_snackList.push_front(hole);
+      begin = *it;
+      ++it;
+  }
+
+  // 生成最后一个 hole
   hole = ScpsTpOptionSnack::SnackHole(m_nextRxSeq.Get(), begin.first);
   m_snackList.push_front(hole);
 

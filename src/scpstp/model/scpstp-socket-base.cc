@@ -87,11 +87,24 @@ ScpsTpSocketBase::GetTypeId(void)
                   MakeEnumChecker(LossType::Corruption, "Corruption",
                                   LossType::Congestion, "Congestion",
                                   LossType::Link_Outage, "Link_Outage"))
+    .AddAttribute("LinkOutPersistTimeout",
+                  "Persist timeout to probe for link state",
+                  TimeValue(Seconds(2)),
+                   MakeTimeAccessor (&ScpsTpSocketBase::GetLinkOutPersistTimeout,
+                                     &ScpsTpSocketBase::SetLinkOutPersistTimeout),
+                   MakeTimeChecker ())
+    .AddAttribute ("DataRetriesForLinkOut",
+                   "Number of data retransmission attempts for link outage state",
+                   UintegerValue (5),
+                   MakeUintegerAccessor (&ScpsTpSocketBase::m_dataRetriesForLinkOut),   
+                   MakeUintegerChecker<uint32_t> ())              
     .AddTraceSource("LossType",
                     "Reason for data loss",
                     MakeTraceSourceAccessor (&ScpsTpSocketBase::m_lossType),
                     "ns3::EnumValueCallback::String"
                     );
+    
+                      
   return tid;
 }
 
@@ -168,7 +181,9 @@ ScpsTpSocketBase::ScpsTpSocketBase(const ScpsTpSocketBase &sock)
   : TcpSocketBase (sock),
     m_lossType (sock.m_lossType),
     m_scpstp (sock.m_scpstp),
-    m_isCorruptionRecovery (sock.m_isCorruptionRecovery)
+    m_isCorruptionRecovery (sock.m_isCorruptionRecovery),
+    m_linkOutPersistTimeout(sock.m_linkOutPersistTimeout),
+    m_dataRetriesForLinkOut(sock.m_dataRetriesForLinkOut)
 {
   NS_LOG_FUNCTION (this);
   NS_LOG_LOGIC ("Invoked the copy constructor");
@@ -298,15 +313,24 @@ ScpsTpSocketBase::SetLossType(ScpsTpSocketBase::LossType losstype)
   if(m_lossType == LossType::Link_Outage && m_linkOutPersistEvent.IsExpired ())
     {
     NS_LOG_LOGIC (this << " Enter linkout persist state");
+
     NS_LOG_LOGIC (this << " Cancelled ReTxTimeout event which was set to expire at " <<
                   (Simulator::Now () + Simulator::GetDelayLeft (m_retxEvent)).GetSeconds ());
     m_retxEvent.Cancel ();
+
     NS_LOG_LOGIC ("Schedule persist timeout at time " <<
                   Simulator::Now ().GetSeconds () << " to expire at time " <<
-                  (Simulator::Now () + m_persistTimeout).GetSeconds ());
-    m_linkOutPersistEvent = Simulator::Schedule (m_persistTimeout, &ScpsTpSocketBase::LinkOutPersistTimeout, this);
-    NS_ASSERT (m_persistTimeout == Simulator::GetDelayLeft (m_linkOutPersistEvent));
+                  (Simulator::Now () + m_linkOutPersistTimeout).GetSeconds ());
 
+    //调整拥塞窗口为 1 MSS
+    m_tcb->m_cWnd = m_tcb->m_segmentSize;
+    m_tcb->m_cWndInfl = m_tcb->m_cWnd;
+
+    //记录进入链路中断状态的时间
+    m_linkOutTimeFrom = Simulator::Now ();
+    //调度链路中断持续事件
+    m_linkOutPersistEvent = Simulator::Schedule (m_linkOutPersistTimeout, &ScpsTpSocketBase::LinkOutPersistTimeout, this);
+    NS_ASSERT (m_linkOutPersistTimeout == Simulator::GetDelayLeft (m_linkOutPersistEvent));
     }
 }
 
@@ -349,6 +373,84 @@ ScpsTpSocketBase::Bind6 (void)
 
   return SetupCallback ();
 }
+
+/* Inherit from Socket class: Initiate connection to a remote address:port */
+int
+ScpsTpSocketBase::Connect (const Address & address)
+{
+  NS_LOG_FUNCTION (this << address);
+
+  // If haven't do so, Bind() this socket first
+  if (InetSocketAddress::IsMatchingType (address))
+    {
+      if (m_endPoint == nullptr)
+        {
+          if (Bind () == -1)
+            {
+              NS_ASSERT (m_endPoint == nullptr);
+              return -1; // Bind() failed
+            }
+          NS_ASSERT (m_endPoint != nullptr);
+        }
+      InetSocketAddress transport = InetSocketAddress::ConvertFrom (address);
+      m_endPoint->SetPeer (transport.GetIpv4 (), transport.GetPort ());
+      SetIpTos (transport.GetTos ());
+      m_endPoint6 = nullptr;
+
+      // Get the appropriate local address and port number from the routing protocol and set up endpoint
+      if (SetupEndpoint () != 0)
+        {
+          NS_LOG_ERROR ("Route to destination does not exist ?!");
+          return -1;
+        }
+    }
+  else if (Inet6SocketAddress::IsMatchingType (address))
+    {
+      // If we are operating on a v4-mapped address, translate the address to
+      // a v4 address and re-call this function
+      Inet6SocketAddress transport = Inet6SocketAddress::ConvertFrom (address);
+      Ipv6Address v6Addr = transport.GetIpv6 ();
+      if (v6Addr.IsIpv4MappedAddress () == true)
+        {
+          Ipv4Address v4Addr = v6Addr.GetIpv4MappedAddress ();
+          return Connect (InetSocketAddress (v4Addr, transport.GetPort ()));
+        }
+
+      if (m_endPoint6 == nullptr)
+        {
+          if (Bind6 () == -1)
+            {
+              NS_ASSERT (m_endPoint6 == nullptr);
+              return -1; // Bind() failed
+            }
+          NS_ASSERT (m_endPoint6 != nullptr);
+        }
+      m_endPoint6->SetPeer (v6Addr, transport.GetPort ());
+      m_endPoint = nullptr;
+
+      // Get the appropriate local address and port number from the routing protocol and set up endpoint
+      if (SetupEndpoint6 () != 0)
+        {
+          NS_LOG_ERROR ("Route to destination does not exist ?!");
+          return -1;
+        }
+    }
+  else
+    {
+      m_errno = ERROR_INVAL;
+      return -1;
+    }
+
+  // Re-initialize parameters in case this socket is being reused after CLOSE
+  m_rtt->Reset ();
+  m_synCount = m_synRetries;
+  m_dataRetrCount = m_dataRetries;
+  m_dataRetrCountForLinkOut = m_dataRetriesForLinkOut;
+
+  // DoConnect() will do state-checking and send a SYN packet
+  return DoConnect ();
+}
+
 
 /* Inherit from Socket class: Bind socket (with specific address) to an end-point in ScpsTpL4Protocol */
 int
@@ -756,7 +858,6 @@ ScpsTpSocketBase::SendEmptyPacket (uint8_t flags)
             uint32_t offsetRemainder = rawOffset % m_tcb->m_segmentSize;
             uint32_t rawSize = ((*i).second - (*i).first);
             hole1Size = static_cast<uint16_t>((rawSize + offsetRemainder + m_tcb->m_segmentSize - 1) / m_tcb->m_segmentSize);
-            
             AddOptionSnack (header, hole1Offset, hole1Size);
             allowedSnackOptions--;
           }
@@ -916,6 +1017,8 @@ ScpsTpSocketBase::SendDataPacket (SequenceNumber32 seq, uint32_t maxSize, bool w
     {
       NS_LOG_DEBUG (TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_CWR_SENT");
       m_tcb->m_ecnState = TcpSocketState::ECN_CWR_SENT;
+      // 对ECN的响应已经结束，lossType回到正常状态
+      SetLossType (LossType::Corruption);
       m_ecnCWRSeq = seq;
       flags |= TcpHeader::CWR;
       NS_LOG_INFO ("CWR flags set");
@@ -1373,57 +1476,7 @@ ScpsTpSocketBase::ReceivedData (Ptr<Packet> p, const TcpHeader& tcpHeader)
           return;
         }
     }
-    /*
-  // Now send a new ACK packet acknowledging all received and delivered data
-  if (m_tcb->m_rxBuffer->Size () > m_tcb->m_rxBuffer->Available () || m_tcb->m_rxBuffer->NextRxSequence () > expectedSeq + p->GetSize ())
-    { // A gap exists in the buffer, or we filled a gap: Always ACK
-      m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_NON_DELAYED_ACK);
 
-      if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD || m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE)
-        {
-          SendEmptyPacket (TcpHeader::ACK | TcpHeader::ECE);
-          NS_LOG_DEBUG (TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_SENDING_ECE");
-          m_tcb->m_ecnState = TcpSocketState::ECN_SENDING_ECE;
-        }
-      else
-        {
-
-          SendEmptyPacket (TcpHeader::ACK);
-        }
-    }
-  else
-    { // In-sequence packet: ACK if delayed ack count allows
-      if (++m_delAckCount >= m_delAckMaxCount)
-        {
-          m_delAckEvent.Cancel ();
-          m_delAckCount = 0;
-          m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_NON_DELAYED_ACK);
-          if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD || m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE)
-            {
-              NS_LOG_DEBUG("Congestion algo " << m_congestionControl->GetName ());
-              SendEmptyPacket (TcpHeader::ACK | TcpHeader::ECE);
-              NS_LOG_DEBUG (TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_SENDING_ECE");
-              m_tcb->m_ecnState = TcpSocketState::ECN_SENDING_ECE;
-            }
-          else
-            {
-              SendEmptyPacket (TcpHeader::ACK);
-            }
-        }
-      else if (!m_delAckEvent.IsExpired ())
-        {
-          m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
-        }
-      else if (m_delAckEvent.IsExpired ())
-        {
-          m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
-          m_delAckEvent = Simulator::Schedule (m_delAckTimeout,
-                                               &ScpsTpSocketBase::DelAckTimeout, this);
-          NS_LOG_LOGIC (this << " scheduled delayed ACK at " <<
-                        (Simulator::Now () + Simulator::GetDelayLeft (m_delAckEvent)).GetSeconds ());
-        }
-    }
-  */
   // Now send a new ACK packet acknowledging all received and delivered data
   //无论是否是乱序包，都按照delACK的逻辑发送ACK
   if (++m_delAckCount >= m_delAckMaxCount)
@@ -1467,7 +1520,25 @@ ScpsTpSocketBase::NewAck (SequenceNumber32 const& ack, bool resetRTO)
 
   // Reset the data retransmission count. We got a new ACK!
   m_dataRetrCount = m_dataRetries;
+  //退出链路中断持续状态
+  if (m_lossType == ScpsTpSocketBase::Link_Outage)
+    {
+      //判断当前收到的ACK是否是链路中断之后一个RTT后的ACK
+      if(Simulator::Now ().GetSeconds () - m_linkOutTimeFrom.GetSeconds () > m_rtt->GetEstimate ().GetSeconds ())
+      {
+        NS_LOG_LOGIC ("LinkOutage canceled at " << Simulator::Now ().GetSeconds ());
+        SetLossType(ScpsTpSocketBase::Corruption);
+        if (m_linkOutPersistEvent.IsRunning ())
+        { 
+          NS_LOG_LOGIC ("LinkOutPersistTimeout canceled at " << Simulator::Now ().GetSeconds ());
+          m_linkOutPersistEvent.Cancel ();
+          m_dataRetrCountForLinkOut = m_dataRetriesForLinkOut;
+          SendPendingData (m_connected);
+        }
+      }
 
+    }
+  
   if (m_state != SYN_RCVD && resetRTO)
     { // Set RTO unless the ACK is received in SYN_RCVD state
       NS_LOG_LOGIC (this << " Cancelled ReTxTimeout event which was set to expire at " <<
@@ -1655,7 +1726,7 @@ ScpsTpSocketBase::ReceivedAck (Ptr<Packet> packet, const TcpHeader& tcpHeader)
           NS_LOG_INFO ("Received ECN Echo is valid");
           m_ecnEchoSeq = ackNumber;
           NS_LOG_DEBUG (TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_ECE_RCVD");
-          //ECN: Set lossType to congestion
+          //ECN:Set lossType to congestion
           SetLossType (ScpsTpSocketBase::Congestion);
           m_tcb->m_ecnState = TcpSocketState::ECN_ECE_RCVD;
           if (m_tcb->m_congState != TcpSocketState::CA_CWR)
@@ -1750,10 +1821,20 @@ ScpsTpSocketBase::ReTxTimeout ()
 
   if (m_dataRetrCount == 0)
     {
-      NS_LOG_INFO ("No more data retries available. Dropping connection");
-      NotifyErrorClose ();
-      DeallocateEndPoint ();
-      return;
+      //当数据重传尝试次数用完后，也可能因为链路故障，如果此时仍在进行数据传输，进入持续状态,
+      //持续探测一段时间后，如果链路恢复，可以继续发送数据，如果链路没有恢复，关闭连接
+      if(m_state == ESTABLISHED)
+      {
+        SetLossType (ScpsTpSocketBase::Link_Outage);
+      }
+      else
+      {
+        NS_LOG_INFO ("No more data retries available. Dropping connection");
+        NotifyErrorClose ();
+        DeallocateEndPoint ();
+        return;
+      }
+
     }
   else
     {
@@ -1766,11 +1847,11 @@ ScpsTpSocketBase::ReTxTimeout ()
 
   // Reset dupAckCount
   m_dupAckCount = 0;
+  
   if (!m_sackEnabled)
     {
       m_txBuffer->ResetRenoSack ();
     }
-
   // From RFC 6675, Section 5.1
   // [RFC2018] suggests that a TCP sender SHOULD expunge the SACK
   // information gathered from a receiver upon a retransmission timeout
@@ -1848,7 +1929,7 @@ ScpsTpSocketBase::ReTxTimeout ()
       m_congestionControl->CongestionStateSet (m_tcb, TcpSocketState::CA_LOSS);
       m_tcb->m_congState = TcpSocketState::CA_LOSS;
 
-      m_pacingTimer.Cancel ();
+      //m_pacingTimer.Cancel ();
 
       NS_ASSERT_MSG (BytesInFlight () == 0, "There are some bytes in flight after an RTO: " <<
                     BytesInFlight ());
@@ -2284,7 +2365,6 @@ ScpsTpSocketBase::DupAck (uint32_t currentDelivered)
 
   if (m_tcb->m_congState == TcpSocketState::CA_RECOVERY)
     {
-      // because SCPSTP 不会因为recovery减小cwnd，所以这个接收到的dupack不能出发RenoSack
       /*
       if (!m_sackEnabled)
         {
@@ -2292,7 +2372,7 @@ ScpsTpSocketBase::DupAck (uint32_t currentDelivered)
           // has left the network. This is equivalent to a SACK of one block.
           m_txBuffer->AddRenoSack ();
         }
-      */
+        */
       if (!m_congestionControl->HasCongControl ())
         {
           m_recoveryOps->DoRecovery (m_tcb, currentDelivered);
@@ -2344,16 +2424,14 @@ ScpsTpSocketBase::DupAck (uint32_t currentDelivered)
           // (3.1) Set HighRxt to HighACK.
           // Not clear in RFC. We don't do this here, since we still have
           // to retransmit the segment.
-
-          //同样，SCPSTP不会因为recovery减小cwnd，所以这个接收到的dupack不能触发RenoSack
-          /*
+        /*
           if (!m_sackEnabled && m_limitedTx)
             {
               m_txBuffer->AddRenoSack ();
 
               // In limited transmit, cwnd Infl is not updated.
             }
-          */
+            */
         }
     }
 }
@@ -2361,26 +2439,38 @@ ScpsTpSocketBase::DupAck (uint32_t currentDelivered)
 uint32_t
 ScpsTpSocketBase::Window (void) const
 { 
-  if (m_lossType == ScpsTpSocketBase::Link_Outage)
-    {
-      return m_tcb->m_segmentSize;
-    }
-  else
-    {
       return std::min (m_rWnd.Get (), m_tcb->m_cWnd.Get ());
-    }
 }
 
 void
 ScpsTpSocketBase::LinkOutPersistTimeout ()
 { 
+  //处理重传次数
+  if(m_dataRetrCountForLinkOut == 0)
+  {
+    //关闭连接
+    NS_LOG_INFO ("No more data retries available. Dropping connection");
+    NotifyErrorClose ();
+    DeallocateEndPoint ();
+    return;
+  }
+  else
+  {
+    m_dataRetrCountForLinkOut--;
+  }
+
+
 
   NS_LOG_LOGIC ("LinkOutPersistTimeout expired at " << Simulator::Now ().GetSeconds ());
-  m_persistTimeout = std::min (Seconds (60), Time (2 * m_persistTimeout)); // max persist timeout = 60s
-  Ptr<Packet> p = m_txBuffer->CopyFromSequence (1, m_tcb->m_nextTxSequence)->GetPacketCopy ();
-  m_txBuffer->ResetLastSegmentSent ();
+  m_linkOutPersistTimeout = std::min (Seconds (60), Time (2 * m_linkOutPersistTimeout)); // max persist timeout = 60s
+  
+  // 探测包的内容应该是未被接收的数据的第一个字节
+  SequenceNumber32 headseq = m_txBuffer->HeadSequence ();
+  NS_LOG_DEBUG ("LinkOutPersistTimeout: headseq = " << headseq);
+  Ptr<Packet> p = m_txBuffer->CopyFromSequence (1, m_txBuffer->HeadSequence())->GetPacketCopy ();
+
   TcpHeader tcpHeader;
-  tcpHeader.SetSequenceNumber (m_tcb->m_nextTxSequence);
+  tcpHeader.SetSequenceNumber (headseq);
   tcpHeader.SetAckNumber (m_tcb->m_rxBuffer->NextRxSequence ());
   tcpHeader.SetWindowSize (AdvertisedWindowSize ());
   if (m_endPoint != nullptr)
@@ -2393,7 +2483,10 @@ ScpsTpSocketBase::LinkOutPersistTimeout ()
       tcpHeader.SetSourcePort (m_endPoint6->GetLocalPort ());
       tcpHeader.SetDestinationPort (m_endPoint6->GetPeerPort ());
     }
+
+  //添加timestamp选项
   AddOptions (tcpHeader);
+
   //Send a packet tag for setting ECT bits in IP header
   if (m_tcb->m_ecnState != TcpSocketState::ECN_DISABLED)
     {
@@ -2420,8 +2513,8 @@ ScpsTpSocketBase::LinkOutPersistTimeout ()
 
   NS_LOG_LOGIC ("Schedule persist timeout at time "
                 << Simulator::Now ().GetSeconds () << " to expire at time "
-                << (Simulator::Now () + m_persistTimeout).GetSeconds ());
-  m_linkOutPersistEvent = Simulator::Schedule (m_persistTimeout, &ScpsTpSocketBase::LinkOutPersistTimeout, this);
+                << (Simulator::Now () + m_linkOutPersistTimeout).GetSeconds ());
+  m_linkOutPersistEvent = Simulator::Schedule (m_linkOutPersistTimeout, &ScpsTpSocketBase::LinkOutPersistTimeout, this);
 }
 
 /* Received a packet upon ESTABLISHED state. This function is mimicking the
@@ -2437,18 +2530,6 @@ ScpsTpSocketBase::ProcessEstablished (Ptr<Packet> packet, const TcpHeader& tcpHe
   // Different flags are different events
   if (tcpflags == TcpHeader::ACK)
     {
-      if (tcpHeader.GetAckNumber () >= m_tcb->m_nextTxSequence + 1 && m_lossType == ScpsTpSocketBase::Link_Outage)
-      {//退出linkoutage
-        SetLossType(ScpsTpSocketBase::Corruption);
-        if (m_linkOutPersistEvent.IsRunning ())
-        { 
-          NS_LOG_LOGIC ("LinkOutPersistTimeout canceled at " << Simulator::Now ().GetSeconds ());
-          m_linkOutPersistEvent.Cancel ();
-          SendPendingData (m_connected);
-        }
-        
-        
-      }
       if (tcpHeader.GetAckNumber () < m_txBuffer->HeadSequence ())
         {
           // Case 1:  If the ACK is a duplicate (SEG.ACK < SND.UNA), it can be ignored.
@@ -2566,7 +2647,35 @@ ScpsTpSocketBase::ReadOptions (const TcpHeader &tcpHeader, uint32_t *bytesSacked
     {
       m_txBuffer->UpdateSnackedData (snackList_temp);
       NS_LOG_INFO ("SNACK option received");
-      //是不是要重发数据
+
+      /*
+      // 避免过于激进的重传，对重传的包的数量进行限制
+      uint32_t maxSnackRetrnsNum = 5;
+      for (ScpsTpOptionSnack::SnackList::const_iterator i = snackList_temp.begin ();
+           i != snackList_temp.end () && maxSnackRetrnsNum != 0; ++i)
+          {
+            SequenceNumber32 startSeq = i->first;
+            SequenceNumber32 endSeq = i->second;
+            uint32_t maxSizeToSend;
+            //将startSeq到endSeq的数据立即重传
+            
+            for(SequenceNumber32 seq = startSeq; seq < endSeq; seq += m_tcb->m_segmentSize)
+            {
+              if(seq + m_tcb->m_segmentSize > endSeq)
+              {
+                maxSizeToSend = static_cast<uint32_t> (endSeq - seq);
+              }
+              else
+              {
+                maxSizeToSend = m_tcb->m_segmentSize;
+              }
+              m_tcb->m_nextTxSequence = seq;
+              uint32_t sz = SendDataPacket (m_tcb->m_nextTxSequence, maxSizeToSend, true);
+              NS_ASSERT (sz > 0);
+              maxSnackRetrnsNum--;
+            }
+          }
+      */
     }
 }
 
@@ -2582,6 +2691,33 @@ ScpsTpSocketBase::ProcessOptionSnack (const Ptr<const TcpOption> option, ScpsTpO
   hole = ScpsTpOptionSnack::SnackHole(holeLeftEdge, holeRightEdge);
   snackList.push_back(hole);
   // 对txBuffer的更新在ReadOptions函数中进行
+}
+
+void 
+ScpsTpSocketBase::SetLinkOutPersistTimeout (Time timeout)
+{
+  NS_LOG_FUNCTION (this << timeout);
+  m_linkOutPersistTimeout = timeout;
+}
+
+Time
+ScpsTpSocketBase::GetLinkOutPersistTimeout (void) const
+{
+  NS_LOG_FUNCTION (this);
+  return m_linkOutPersistTimeout;
+}
+
+void
+ScpsTpSocketBase::CancelAllTimers ()
+{
+  m_retxEvent.Cancel ();
+  m_persistEvent.Cancel ();
+  m_linkOutPersistEvent.Cancel ();
+  m_delAckEvent.Cancel ();
+  m_lastAckEvent.Cancel ();
+  m_timewaitEvent.Cancel ();
+  m_sendPendingDataEvent.Cancel ();
+  m_pacingTimer.Cancel ();
 }
 
 } // namespace ns3

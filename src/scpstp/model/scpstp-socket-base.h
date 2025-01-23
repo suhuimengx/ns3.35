@@ -112,6 +112,7 @@ public:
    */
   virtual void SetScpsTp (Ptr<ScpsTpL4Protocol> scpstp);
 
+  virtual int Connect (const Address &address);      // Setup endpoint and call ProcessAction() to connect
   virtual int Bind (void);    // Bind a socket by setting up endpoint in ScpsTpL4Protocol
   virtual int Bind6 (void);    // Bind a socket by setting up endpoint in ScpsTpL4Protocol
   virtual int Bind (const Address &address);         // ... endpoint of specific addr or port
@@ -353,6 +354,14 @@ protected:
    */
   void ProcessOptionSnack(const Ptr<const TcpOption> option, ScpsTpOptionSnack::SnackList& snackList, uint32_t ackNumber);
 
+  virtual void SetLinkOutPersistTimeout (Time timeout);
+  virtual Time GetLinkOutPersistTimeout (void) const;
+
+  /**
+   * \brief Cancel all timer when endpoint is deleted
+   */
+  virtual void CancelAllTimers (void);
+
 private:
 
 protected:
@@ -360,6 +369,11 @@ protected:
   Ptr<ScpsTpL4Protocol>  m_scpstp;                 //!< the associated ScpsTp L4 protocol  
   bool m_isCorruptionRecovery;                     //!< true if the recovery is due to corruption
   EventId m_linkOutPersistEvent;                   //!< Link outage persist event
+  Time         m_linkOutPersistTimeout   {Seconds (0.0)};   //!< Time between sending 1-byte probes for link outage
+  Time         m_linkOutTimeFrom         {Seconds (0.0)};   //!< Time when the link outage started
+  uint32_t          m_dataRetrCountForLinkOut {0}; //!< Count of remaining data retransmission attempts to enter link outage state
+  uint32_t          m_dataRetriesForLinkOut   {0}; //!< Number of data retransmission attempts for link outage state
+
 
 };
 
