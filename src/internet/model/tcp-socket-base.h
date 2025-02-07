@@ -699,7 +699,7 @@ protected:
    * \param tcpPayloadSize the size of TCP payload
    * \return true if the TCP segment is valid
    */
-  bool IsValidTcpSegment (const SequenceNumber32 seq, const uint32_t tcpHeaderSize,
+  virtual bool IsValidTcpSegment (const SequenceNumber32 seq, const uint32_t tcpHeaderSize,
                           const uint32_t tcpPayloadSize);
 
   /**

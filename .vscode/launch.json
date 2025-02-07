@@ -9,7 +9,7 @@
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/build/${relativeFileDirname}/${fileBasenameNoExtension}",
-            "args": [ "--tracing=1","--prefix_name=VegasCongestionTest","--transport_prot=TcpVegas","--error_p=0.05"],
+            "args": [ "--tracing=1","--prefix_name=testcase1","--transport_prot=TcpNewReno","--error_p=0.01"],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "Build",

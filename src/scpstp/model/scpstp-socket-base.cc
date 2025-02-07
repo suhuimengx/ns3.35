@@ -1442,8 +1442,11 @@ ScpsTpSocketBase::ReceivedData (Ptr<Packet> p, const TcpHeader& tcpHeader)
   // Put into Rx buffer
   SequenceNumber32 expectedSeq = m_tcb->m_rxBuffer->NextRxSequence ();
   NS_ASSERT (m_tcb->m_rxBuffer->GetInstanceTypeId () == ScpsTpRxBuffer::GetTypeId ());
+
   if (!m_tcb->m_rxBuffer->Add (p, tcpHeader))
     { // Insert failed: No data or RX buffer full
+
+      /*
       if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD || m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE)
         {
           SendEmptyPacket (TcpHeader::ACK | TcpHeader::ECE);
@@ -1453,6 +1456,37 @@ ScpsTpSocketBase::ReceivedData (Ptr<Packet> p, const TcpHeader& tcpHeader)
       else
         {
           SendEmptyPacket (TcpHeader::ACK);
+        }*/
+
+      //无论是否是乱序包，都按照固定频率发包
+      if (++m_delAckCount >= m_delAckMaxCount)
+      {
+        m_delAckEvent.Cancel ();
+        m_delAckCount = 0;
+        m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_NON_DELAYED_ACK);
+        if (m_tcb->m_ecnState == TcpSocketState::ECN_CE_RCVD || m_tcb->m_ecnState == TcpSocketState::ECN_SENDING_ECE)
+          {
+            NS_LOG_DEBUG("Congestion algo " << m_congestionControl->GetName ());
+            SendEmptyPacket (TcpHeader::ACK | TcpHeader::ECE);
+            NS_LOG_DEBUG (TcpSocketState::EcnStateName[m_tcb->m_ecnState] << " -> ECN_SENDING_ECE");
+            m_tcb->m_ecnState = TcpSocketState::ECN_SENDING_ECE;
+          }
+        else
+          {
+            SendEmptyPacket (TcpHeader::ACK);
+          }
+      }
+      else if (!m_delAckEvent.IsExpired ())
+        {
+          m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
+        }
+      else if (m_delAckEvent.IsExpired ())
+        {
+          m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
+          m_delAckEvent = Simulator::Schedule (m_delAckTimeout,
+                                              &ScpsTpSocketBase::DelAckTimeout, this);
+          NS_LOG_LOGIC (this << " scheduled delayed ACK at " <<
+                        (Simulator::Now () + Simulator::GetDelayLeft (m_delAckEvent)).GetSeconds ());
         }
       return;
     }
@@ -1477,8 +1511,6 @@ ScpsTpSocketBase::ReceivedData (Ptr<Packet> p, const TcpHeader& tcpHeader)
         }
     }
 
-  // Now send a new ACK packet acknowledging all received and delivered data
-  //无论是否是乱序包，都按照delACK的逻辑发送ACK
   if (++m_delAckCount >= m_delAckMaxCount)
   {
     m_delAckEvent.Cancel ();
@@ -1496,18 +1528,18 @@ ScpsTpSocketBase::ReceivedData (Ptr<Packet> p, const TcpHeader& tcpHeader)
         SendEmptyPacket (TcpHeader::ACK);
       }
   }
-else if (!m_delAckEvent.IsExpired ())
-  {
-    m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
-  }
-else if (m_delAckEvent.IsExpired ())
-  {
-    m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
-    m_delAckEvent = Simulator::Schedule (m_delAckTimeout,
-                                        &ScpsTpSocketBase::DelAckTimeout, this);
-    NS_LOG_LOGIC (this << " scheduled delayed ACK at " <<
-                  (Simulator::Now () + Simulator::GetDelayLeft (m_delAckEvent)).GetSeconds ());
-  }
+  else if (!m_delAckEvent.IsExpired ())
+    {
+      m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
+    }
+  else if (m_delAckEvent.IsExpired ())
+    {
+      m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
+      m_delAckEvent = Simulator::Schedule (m_delAckTimeout,
+                                          &ScpsTpSocketBase::DelAckTimeout, this);
+      NS_LOG_LOGIC (this << " scheduled delayed ACK at " <<
+                    (Simulator::Now () + Simulator::GetDelayLeft (m_delAckEvent)).GetSeconds ());
+    }
 }
 
 // Called by the ReceivedAck() when new ACK received and by ProcessSynRcvd()
@@ -1821,7 +1853,7 @@ ScpsTpSocketBase::ReTxTimeout ()
 
   if (m_dataRetrCount == 0)
     {
-      //当数据重传尝试次数用完后，也可能因为链路故障，如果此时仍在进行数据传输，进入持续状态,
+      //当数据重传尝试次数用完后，也可能因为链路故障，如果此时仍在进行数据传输，则进入持续状态,
       //持续探测一段时间后，如果链路恢复，可以继续发送数据，如果链路没有恢复，关闭连接
       if(m_state == ESTABLISHED)
       {
@@ -2004,14 +2036,7 @@ ScpsTpSocketBase::EnterRecovery (uint32_t currentDelivered)
       m_isCorruptionRecovery = true;
       m_congestionControl->CongestionStateSet (m_tcb, TcpSocketState::CA_RECOVERY);
       m_tcb->m_congState = TcpSocketState::CA_RECOVERY;
-      // (4.2) ssthresh = cwnd = (FlightSize / 2)
-      // If SACK is not enabled, still consider the head as 'in flight' for
-      // compatibility with old ns-3 versions
-      // (4.3) Retransmit the first data segment presumed dropped
       DoRetransmit ();
-      // (4.4) Run SetPipe ()
-      // (4.5) Proceed to step (C)
-      // these steps are done after the ProcessAck function (SendPendingData)
     }
  
 }
@@ -2718,6 +2743,53 @@ ScpsTpSocketBase::CancelAllTimers ()
   m_timewaitEvent.Cancel ();
   m_sendPendingDataEvent.Cancel ();
   m_pacingTimer.Cancel ();
+}
+
+bool
+ScpsTpSocketBase::IsValidTcpSegment (const SequenceNumber32 seq, const uint32_t tcpHeaderSize,
+                                  const uint32_t tcpPayloadSize)
+{
+  if (tcpHeaderSize == 0 || tcpHeaderSize > 60)
+    {
+      NS_LOG_ERROR ("Bytes removed: " << tcpHeaderSize << " invalid");
+      return false; // Discard invalid packet
+    }
+  else if (tcpPayloadSize > 0 && OutOfRange (seq, seq + tcpPayloadSize))
+    {
+      // Discard fully out of range data packets
+      NS_LOG_WARN ("At state " << TcpStateName[m_state] <<
+                   " received packet of seq [" << seq <<
+                   ":" << seq + tcpPayloadSize <<
+                   ") out of range [" << m_tcb->m_rxBuffer->NextRxSequence () << ":" <<
+                   m_tcb->m_rxBuffer->MaxRxSequence () << ")");
+      // Acknowledgement should be sent for all unacceptable packets (RFC793, p.69)
+      // 但是按照固定ACK机制，不立刻响应
+
+      //SendEmptyPacket (TcpHeader::ACK);
+      
+      if (++m_delAckCount >= m_delAckMaxCount)
+          {
+            m_delAckEvent.Cancel ();
+            m_delAckCount = 0;
+            m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_NON_DELAYED_ACK);
+            SendEmptyPacket (TcpHeader::ACK);
+          }
+        else if (!m_delAckEvent.IsExpired ())
+          {
+            m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
+          }
+        else if (m_delAckEvent.IsExpired ())
+          {
+            m_congestionControl->CwndEvent (m_tcb, TcpSocketState::CA_EVENT_DELAYED_ACK);
+            m_delAckEvent = Simulator::Schedule (m_delAckTimeout,
+                                                &ScpsTpSocketBase::DelAckTimeout, this);
+            NS_LOG_LOGIC (this << " scheduled delayed ACK at " <<
+                          (Simulator::Now () + Simulator::GetDelayLeft (m_delAckEvent)).GetSeconds ());
+          }
+
+      return false;
+    }
+  return true;
 }
 
 } // namespace ns3

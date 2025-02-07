@@ -362,6 +362,17 @@ protected:
    */
   virtual void CancelAllTimers (void);
 
+  /**
+   * \brief Checks whether the given TCP segment is valid or not.
+   *
+   * \param seq the sequence number of packet's TCP header
+   * \param tcpHeaderSize the size of packet's TCP header
+   * \param tcpPayloadSize the size of TCP payload
+   * \return true if the TCP segment is valid
+   */
+  virtual bool IsValidTcpSegment (const SequenceNumber32 seq, const uint32_t tcpHeaderSize,
+                          const uint32_t tcpPayloadSize);
+                          
 private:
 
 protected:
